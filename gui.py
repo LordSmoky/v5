@@ -1734,64 +1734,92 @@ class SalaryCalculatorGUI:
         if hasattr(self, 'hours_worked_var'):
             self.hours_worked_var.set("")  # Очищаем поле
     
-    def _export_salary_data(self, teacher_id=None, start_date=None, end_date=None, output_format='pdf', 
-                        title="Отчет по зарплате", include_details=True, include_chart=True):
+    def _export_salary_data(self, teacher_id, start_date, end_date, include_chart=False, output_format='pdf'):
         """
-        Экспорт данных о зарплате в указанный формат
+        Экспортирует данные о зарплате преподавателя за указанный период
+        
+        :param teacher_id: ID преподавателя
+        :param start_date: начальная дата периода (строка в формате дд.мм.гггг или объект datetime)
+        :param end_date: конечная дата периода (строка в формате дд.мм.гггг или объект datetime)
+        :param include_chart: включать ли график в отчет
+        :param output_format: формат выходного файла ('pdf', 'csv')
+        :return: путь к созданному файлу, если экспорт успешен, иначе None
         """
-
         try:
-            # Получаем данные о преподавателе
-            if teacher_id is None:
-                raise ValueError("Не указан ID преподавателя")
+            logger.info(f"Экспорт данных о зарплате для преподавателя ID={teacher_id} за период {start_date} - {end_date}")
             
-            teacher_data = self.app.get_teacher_by_id(teacher_id)
-            if not teacher_data:
-                raise ValueError(f"Преподаватель с ID {teacher_id} не найден")
+            # Получаем данные преподавателя
+            teacher_info = self.app.get_teacher_by_id(teacher_id)
+            if not teacher_info:
+                raise ValueError(f"Преподаватель с ID={teacher_id} не найден")
             
             # Получаем данные о зарплате за период
-            salary_data = self.app.get_teacher_salary_data(teacher_id, start_date, end_date)
+            salary_data = self.app.get_salary_data_for_period(teacher_id, start_date, end_date)
             
-            # Запрашиваем путь для сохранения файла
-            file_extensions = {
-                'pdf': [("PDF файлы", "*.pdf")],
-                'excel': [("Excel файлы", "*.xlsx")],
-                'csv': [("CSV файлы", "*.csv")]
-            }
-            
-            if output_format not in file_extensions:
-                raise ValueError(f"Неподдерживаемый формат экспорта: {output_format}")
-            
-            default_extension = '.' + output_format
-            file_path = filedialog.asksaveasfilename(
-                defaultextension=default_extension,
-                filetypes=file_extensions[output_format],
-                title="Сохранить отчет как",
-                initialfile=f"{title.replace(' ', '_')}_{datetime.datetime.now().strftime('%Y%m%d')}"
-            )
-            
-            if not file_path:
+            if not salary_data:
+                messagebox.showinfo("Информация", "Нет данных о зарплате за указанный период")
                 return None
             
-            # Выбираем метод экспорта в зависимости от формата
-            if output_format == 'pdf':
-                self._export_to_pdf(salary_data, file_path, title, include_details, include_chart)
-            elif output_format == 'excel':
-                self._export_to_excel(salary_data, file_path, title, include_details, include_chart)
-            elif output_format == 'csv':
-                # Используем метод из SalaryApp для CSV
-                report = self.app.generate_monthly_payroll_report(
-                    start_date.year, 
-                    start_date.month, 
-                    format='csv'
-                )
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(report)
+            # Предлагаем пользователю выбрать место для сохранения
+            if output_format.lower() == 'pdf':
+                file_types = [("PDF файлы", "*.pdf"), ("Все файлы", "*.*")]
+                default_ext = ".pdf"
+            elif output_format.lower() == 'csv':
+                file_types = [("CSV файлы", "*.csv"), ("Все файлы", "*.*")]
+                default_ext = ".csv"
+            else:
+                file_types = [("Все файлы", "*.*")]
+                default_ext = ""
+                
+            output_file = filedialog.asksaveasfilename(
+                defaultextension=default_ext,
+                filetypes=file_types,
+                title="Сохранить отчет как...",
+                initialfile=f"salary_report_{teacher_info['name']}_{start_date}_{end_date}{default_ext}"
+            )
             
-            return file_path
-        
+            if not output_file:  # Пользователь отменил сохранение
+                return None
+            
+            # Экспорт в зависимости от формата
+            if output_format.lower() == 'pdf':
+                # Создаем PDF отчет
+                if not self._create_pdf_report(
+                    salary_data=salary_data,
+                    teacher_info=teacher_info,
+                    period_start=start_date,
+                    period_end=end_date,
+                    output_file=output_file,
+                    include_chart=include_chart
+                ):
+                    return None
+            elif output_format.lower() == 'csv':
+                # Экспорт в CSV (можно добавить отдельный метод для этого)
+                with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
+                    import csv
+                    writer = csv.writer(csvfile)
+                    # Заголовки
+                    writer.writerow(['Дата', 'Отработано часов', 'Ставка', 'Бонус', 'Налог', 'Итого'])
+                    # Данные
+                    for entry in salary_data:
+                        writer.writerow([
+                            entry.get('calculation_date', ''),
+                            entry.get('hours_worked', 0),
+                            entry.get('hourly_rate', 0),
+                            entry.get('bonus_amount', 0),
+                            entry.get('tax_amount', 0),
+                            entry.get('net_salary', 0)
+                        ])
+            else:
+                messagebox.showerror("Ошибка", f"Неподдерживаемый формат файла: {output_format}")
+                return None
+                
+            messagebox.showinfo("Успех", f"Отчет успешно сохранен в файл:\n{output_file}")
+            return output_file
+            
         except Exception as e:
             logger.error(f"Ошибка при экспорте данных о зарплате: {str(e)}")
+            messagebox.showerror("Ошибка", f"Не удалось экспортировать данные о зарплате: {str(e)}")
             return None
 
 
@@ -2429,137 +2457,61 @@ class SalaryCalculatorGUI:
         # можно перенести существующий функционал из vacation_tab_manager._export_vacation_report()
         messagebox.showinfo("Информация", "Функция генерации отчета по отпускам находится в разработке")
 
-    def _export_salary_data(self, teacher_id=None, start_date=None, end_date=None, output_format='pdf', title='Отчет по зарплате', include_details=True, include_chart=True):
+
+    def _export_salary_data(self, teacher_id, start_date, end_date, include_chart=False):
         """
-        Экспортирует данные о зарплате преподавателя за указанный период в файл.
+        Экспортирует данные о зарплате преподавателя за указанный период
         
         :param teacher_id: ID преподавателя
-        :param start_date: Начальная дата периода (datetime.date)
-        :param end_date: Конечная дата периода (datetime.date)
-        :param output_format: Формат выходного файла ('pdf', 'excel', 'csv')
-        :param title: Заголовок отчета
-        :param include_details: Включать ли детали расчета
-        :param include_chart: Включать ли графики
-        :return: Путь к созданному файлу или None в случае ошибки
+        :param start_date: начальная дата периода (строка в формате дд.мм.гггг или объект datetime)
+        :param end_date: конечная дата периода (строка в формате дд.мм.гггг или объект datetime)
+        :param include_chart: включать ли график в отчет
+        :return: True если экспорт выполнен успешно, иначе False
         """
         try:
-            # Проверяем, что ID преподавателя указан и является корректным значением
-            if teacher_id is None or not str(teacher_id).isdigit():
-                error_msg = "Не указан ID преподавателя"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-            
-            # Проверяем даты
-            if start_date is None:
-                start_date = date.today().replace(day=1)  # Начало текущего месяца
-                logger.info(f"Не указана начальная дата, используем начало текущего месяца: {start_date}")
-                
-            if end_date is None:
-                end_date = date.today()  # Текущая дата
-                logger.info(f"Не указана конечная дата, используем текущую дату: {end_date}")
-                
-            if isinstance(start_date, str):
-                try:
-                    start_date = datetime.datetime.strptime(start_date, "%d.%m.%Y").date()
-                except ValueError:
-                    logger.error(f"Неверный формат начальной даты: {start_date}")
-                    raise ValueError(f"Неверный формат начальной даты: {start_date}. Используйте ДД.ММ.ГГГГ")
-                    
-            if isinstance(end_date, str):
-                try:
-                    end_date = datetime.datetime.strptime(end_date, "%d.%m.%Y").date()
-                except ValueError:
-                    logger.error(f"Неверный формат конечной даты: {end_date}")
-                    raise ValueError(f"Неверный формат конечной даты: {end_date}. Используйте ДД.ММ.ГГГГ")
-            
-            if start_date > end_date:
-                error_msg = "Начальная дата не может быть позже конечной даты"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-            
             logger.info(f"Экспорт данных о зарплате для преподавателя ID={teacher_id} за период {start_date} - {end_date}")
             
-            # Получаем информацию о преподавателе
-            teacher = self.app.get_teacher_by_id(teacher_id)
-            if not teacher:
-                error_msg = f"Преподаватель с ID={teacher_id} не найден"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
+            # Получаем данные преподавателя
+            teacher_info = self.app.get_teacher_by_id(teacher_id)
+            if not teacher_info:
+                raise ValueError(f"Преподаватель с ID={teacher_id} не найден")
             
-            # Получаем данные о зарплате за указанный период
-            salary_data = self.app.get_salary_data(
-                teacher_id=teacher_id,
-                start_date=start_date,
-                end_date=end_date
-            )
+            # Получаем данные о зарплате за период
+            salary_data = self.app.get_salary_data_for_period(teacher_id, start_date, end_date)
             
             if not salary_data:
-                logger.warning(f"Нет данных о зарплате для преподавателя ID={teacher_id} за период {start_date} - {end_date}")
                 messagebox.showinfo("Информация", "Нет данных о зарплате за указанный период")
-                return None
+                return False
             
-            # Формируем имя файла
-            date_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_dir = os.path.join(os.getcwd(), "reports")
-            os.makedirs(output_dir, exist_ok=True)
+            # Предлагаем пользователю выбрать место для сохранения
+            output_file = filedialog.asksaveasfilename(
+                defaultextension=".pdf",
+                filetypes=[("PDF файлы", "*.pdf"), ("Все файлы", "*.*")],
+                title="Сохранить отчет как...",
+                initialfile=f"salary_report_{teacher_info['name']}_{start_date}_{end_date}.pdf"
+            )
             
-            teacher_name_safe = teacher['name'].replace(' ', '_').replace('/', '_').replace('\\', '_')
-            filename_base = f"salary_report_{teacher_name_safe}_{date_str}"
+            if not output_file:  # Пользователь отменил сохранение
+                return False
             
-            # Создаем отчет в зависимости от формата
-            if output_format.lower() == 'pdf':
-                output_file = os.path.join(output_dir, f"{filename_base}.pdf")
-                if not self._create_pdf_report(
-                    output_file=output_file,
-                    teacher=teacher,
-                    salary_data=salary_data,
-                    start_date=start_date,
-                    end_date=end_date,
-                    title=title,
-                    include_details=include_details,
-                    include_chart=include_chart
-                ):
-                    return None
-            elif output_format.lower() == 'excel':
-                output_file = os.path.join(output_dir, f"{filename_base}.xlsx")
-                if not self._create_excel_report(
-                    output_file=output_file,
-                    teacher=teacher,
-                    salary_data=salary_data,
-                    start_date=start_date,
-                    end_date=end_date,
-                    title=title,
-                    include_details=include_details,
-                    include_chart=include_chart
-                ):
-                    return None
-            elif output_format.lower() == 'csv':
-                output_file = os.path.join(output_dir, f"{filename_base}.csv")
-                if not self._create_csv_report(
-                    output_file=output_file,
-                    teacher=teacher,
-                    salary_data=salary_data,
-                    start_date=start_date,
-                    end_date=end_date
-                ):
-                    return None
-            else:
-                logger.error(f"Неподдерживаемый формат отчета: {output_format}")
-                messagebox.showerror("Ошибка", f"Неподдерживаемый формат отчета: {output_format}")
-                return None
+            # Создаем отчет
+            if not self._create_pdf_report(
+                salary_data=salary_data,
+                teacher_info=teacher_info,
+                period_start=start_date,
+                period_end=end_date,
+                output_file=output_file,
+                include_chart=include_chart
+            ):
+                return False
             
-            logger.info(f"Отчет успешно создан: {output_file}")
-            return output_file
-        except ValueError as e:
-            # Для ошибок валидации показываем сообщение пользователю
-            logger.error(f"Ошибка при экспорте данных о зарплате: {str(e)}")
-            messagebox.showerror("Ошибка", str(e))
-            return None
+            messagebox.showinfo("Успех", f"Отчет успешно сохранен в файл:\n{output_file}")
+            return True
+            
         except Exception as e:
-            # Для других ошибок логируем подробности
-            logger.error(f"Ошибка при экспорте данных о зарплате: {str(e)}", exc_info=True)
-            messagebox.showerror("Ошибка", f"Ошибка при экспорте данных о зарплате: {str(e)}")
-            return None
+            logger.error(f"Ошибка при экспорте данных о зарплате: {str(e)}")
+            messagebox.showerror("Ошибка", f"Не удалось экспортировать данные о зарплате: {str(e)}")
+            return False
 
 
     def _get_teacher_id_by_name(self, teacher_name):
@@ -2604,86 +2556,48 @@ class SalaryCalculatorGUI:
 
 
     def _generate_salary_report(self):
-        """Генерирует отчет по зарплате на основе выбранных параметров"""
+        """Генерация отчета по зарплате выбранного преподавателя за период"""
         try:
-            scope = self.salary_report_scope_var.get()
-            
-            # Подготовка дат
-            try:
-                start_date = datetime.datetime.strptime(self.start_date_var.get(), "%d.%m.%Y").date()
-                end_date = datetime.datetime.strptime(self.end_date_var.get(), "%d.%m.%Y").date()
-                
-                if start_date > end_date:
-                    messagebox.showerror("Ошибка", "Дата начала не может быть позже даты окончания")
-                    return
-            except ValueError:
-                messagebox.showerror("Ошибка", "Неверный формат даты. Используйте ДД.ММ.ГГГГ")
+            # Проверка выбора преподавателя
+            if not hasattr(self, 'report_teacher_var') or not self.report_teacher_var.get():
+                messagebox.showwarning("Предупреждение", "Выберите преподавателя для отчета")
                 return
+                
+            teacher_name = self.report_teacher_var.get()
+            if not teacher_name or teacher_name not in self.teachers_mapping:
+                messagebox.showwarning("Предупреждение", "Выберите корректного преподавателя")
+                return
+                
+            teacher_id = self.teachers_mapping[teacher_name]
             
-            # Подготовка параметров отчета
-            report_format = self.report_format_var.get()
-            include_details = self.include_details_var.get()
-            include_chart = self.include_chart_var.get()
+            # Получаем период отчета
+            try:
+                start_date = self.start_date_var.get()
+                end_date = self.end_date_var.get()
+                
+                # Проверяем формат дат
+                datetime.datetime.strptime(start_date, "%d.%m.%Y")
+                datetime.datetime.strptime(end_date, "%d.%m.%Y")
+            except ValueError:
+                messagebox.showwarning("Предупреждение", "Введите корректные даты в формате ДД.ММ.ГГГГ")
+                return
+                
+            # Получаем выбранные опции
+            include_chart = self.report_include_chart_var.get() if hasattr(self, 'report_include_chart_var') else False
             
-            period_str = f"{start_date.strftime('%d.%m.%Y')}-{end_date.strftime('%d.%m.%Y')}"
+            # Вызываем экспорт данных
+            output_file = self._export_salary_data(
+                teacher_id=teacher_id,
+                start_date=start_date,
+                end_date=end_date,
+                include_chart=include_chart
+            )
             
-            if scope == "individual":
-                # Индивидуальный отчет
-                selected_name = self.report_teacher_var.get()
-                if not selected_name:
-                    messagebox.showerror("Ошибка", "Преподаватель не выбран")
-                    return
-                
-                # Находим ID преподавателя по имени
-                teachers = self._get_teachers_list()
-                teacher_id = None
-                for t_id, name in teachers:
-                    if name == selected_name:
-                        teacher_id = t_id
-                        break
-                
-                if not teacher_id:
-                    logger.error(f"Не удалось найти ID преподавателя для имени '{selected_name}'")
-                    messagebox.showerror("Ошибка", f"Не удалось найти преподавателя с именем '{selected_name}'")
-                    return
-                
-                title = f"Отчет по зарплате - {selected_name} ({period_str})"
-                
-                logger.info(f"Генерация отчета: тип=Индивидуальный, период={period_str}, "
-                        f"формат={report_format}, преподаватель={selected_name}, ID={teacher_id}")
-                
-                output_file = self._export_salary_data(
-                    teacher_id=teacher_id,
-                    start_date=start_date,
-                    end_date=end_date,
-                    output_format=report_format,
-                    title=title,
-                    include_details=include_details,
-                    include_chart=include_chart
-                )
-            else:
-                # Общий отчет по всем преподавателям
-                title = f"Сводный отчет по зарплате всех преподавателей ({period_str})"
-                
-                logger.info(f"Генерация отчета: тип=Сводный, период={period_str}, формат={report_format}")
-                
-                output_file = self._export_salary_summary(
-                    start_date=start_date,
-                    end_date=end_date,
-                    output_format=report_format,
-                    title=title,
-                    include_details=include_details,
-                    include_chart=include_chart
-                )
+            self.update_status(f"Отчет по зарплате для {teacher_name} сгенерирован")
             
-            if output_file:
-                messagebox.showinfo("Успешно", f"Отчет успешно сформирован и сохранен в файл:\n{output_file}")
-            else:
-                messagebox.showerror("Ошибка", "Не удалось сформировать отчет")
-        
         except Exception as e:
-            logger.error(f"Ошибка при генерации отчета по зарплате: {str(e)}", exc_info=True)
-            messagebox.showerror("Ошибка", f"Ошибка при генерации отчета: {str(e)}")
+            logger.error(f"Ошибка при генерации отчета по зарплате: {str(e)}")
+            messagebox.showerror("Ошибка", f"Не удалось сгенерировать отчет: {str(e)}")
 
 
     def _export_salary_summary(self, start_date=None, end_date=None, output_format='pdf', title='Сводный отчет по зарплате', include_details=True, include_chart=True):
@@ -3625,1585 +3539,175 @@ class SalaryCalculatorGUI:
         except Exception as e:
             logger.error(f"Ошибка при экспорте данных в Word: {str(e)}")
             raise
+    
 
 
-    def _export_vacation_to_pdf(self, data, file_path, title, include_chart=True, is_summary=False):
+    def _create_pdf_report(self, salary_data, teacher_info=None, period_start=None, period_end=None, output_file=None, include_chart=False):
         """
-        Экспорт данных об отпусках в PDF формат
+        Создает PDF-отчет с данными о зарплате
         
-        :param data: Данные об отпусках
-        :param file_path: Путь к создаваемому файлу
-        :param title: Заголовок отчета
-        :param include_chart: Включать ли график отпусков
-        :param is_summary: Является ли отчет сводным
+        :param salary_data: Список словарей с данными о зарплате
+        :param teacher_info: Информация о преподавателе (словарь)
+        :param period_start: Начальная дата периода (строка или объект datetime)
+        :param period_end: Конечная дата периода (строка или объект datetime)
+        :param output_file: Путь для сохранения PDF-файла, если None - запрашивается у пользователя
+        :param include_chart: Включать ли графики в отчет
+        :return: True в случае успешного создания отчета, иначе False
         """
         try:
-            # Проверка наличия необходимых библиотек
+            # Если файл не указан, предложить пользователю выбрать место сохранения
+            if output_file is None:
+                output_file = filedialog.asksaveasfilename(
+                    defaultextension=".pdf",
+                    filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+                    title="Сохранить отчет как..."
+                )
+                if not output_file:  # Пользователь отменил выбор
+                    return False
+            
+            logging.info(f"Создание PDF-отчета о зарплате: {output_file}")
+            
+            # Импортируем библиотеки для создания PDF
             try:
                 from reportlab.lib.pagesizes import A4
                 from reportlab.lib import colors
                 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
                 from reportlab.lib.styles import getSampleStyleSheet
-                import matplotlib.pyplot as plt
-                import matplotlib.dates as mdates
-                from io import BytesIO
-                import numpy as np
+                from reportlab.graphics.shapes import Drawing
+                from reportlab.graphics.charts.barcharts import VerticalBarChart
             except ImportError:
-                messagebox.showerror(
-                    "Ошибка импорта", 
-                    "Отсутствуют необходимые библиотеки для экспорта в PDF. Установите их командой:\n"
-                    "pip install reportlab matplotlib numpy"
-                )
-                return
+                logging.error("Не установлена библиотека reportlab. Установите её с помощью 'pip install reportlab'")
+                return False
             
-            # Создание PDF документа
-            doc = SimpleDocTemplate(file_path, pagesize=A4)
+            # Создаем документ
+            doc = SimpleDocTemplate(output_file, pagesize=A4)
+            story = []
+            
+            # Добавляем стили
             styles = getSampleStyleSheet()
-            elements = []
+            title_style = styles['Heading1']
+            subtitle_style = styles['Heading2']
+            normal_style = styles['Normal']
             
             # Заголовок отчета
-            elements.append(Paragraph(title, styles['Title']))
-            elements.append(Spacer(1, 12))
+            title = "Отчет о заработной плате"
+            story.append(Paragraph(title, title_style))
+            story.append(Spacer(1, 12))
             
-            # Дата создания отчета
-            elements.append(Paragraph(f"Дата создания: {datetime.datetime.now().strftime('%d.%m.%Y %H:%M')}", styles['Normal']))
-            elements.append(Spacer(1, 12))
-            
-            if is_summary:
-                # Сводная таблица для всех преподавателей
-                elements.append(Paragraph("Сводные данные по отпускам", styles['Heading2']))
-                elements.append(Spacer(1, 12))
+            # Информация о преподавателе
+            if teacher_info:
+                teacher_title = f"Преподаватель: {teacher_info.get('name', 'Н/Д')}"
+                story.append(Paragraph(teacher_title, subtitle_style))
                 
-                table_data = [['Преподаватель', 'Всего дней', 'Использовано', 'Осталось', 'Запланировано']]
+                teacher_details = [
+                    f"ID: {teacher_info.get('id', 'Н/Д')}",
+                    f"Должность: {teacher_info.get('position', 'Н/Д')}",
+                    f"Ставка: {teacher_info.get('hourly_rate', 'Н/Д')} руб/час"
+                ]
                 
-                for teacher_data in data:
-                    teacher_name = teacher_data.get('teacher_name', '')
-                    total_days = teacher_data.get('total_vacation_days', 0)
-                    used_days = teacher_data.get('used_vacation_days', 0)
-                    remaining_days = teacher_data.get('remaining_vacation_days', 0)
-                    planned_days = teacher_data.get('planned_vacation_days', 0)
+                for detail in teacher_details:
+                    story.append(Paragraph(detail, normal_style))
                     
-                    table_data.append([teacher_name, str(total_days), str(used_days), str(remaining_days), str(planned_days)])
+                story.append(Spacer(1, 12))
+            
+            # Период
+            if period_start and period_end:
+                period_text = f"Период: с {period_start} по {period_end}"
+                story.append(Paragraph(period_text, subtitle_style))
+                story.append(Spacer(1, 12))
+            
+            # Если данных нет
+            if not salary_data:
+                story.append(Paragraph("Нет данных о зарплате за указанный период", normal_style))
+            else:
+                # Заголовки таблицы
+                table_headers = ["Дата", "Отработано часов", "Ставка", "Бонус", "Налог", "Итого к выплате"]
                 
+                # Данные для таблицы
+                table_data = [table_headers]
+                
+                # Для графика
+                dates = []
+                payments = []
+                
+                # Заполняем данными
+                total_payment = 0
+                for entry in salary_data:
+                    row = [
+                        str(entry.get('calculation_date', 'Н/Д')),
+                        str(entry.get('hours_worked', 0)),
+                        f"{entry.get('hourly_rate', 0):.2f}",
+                        f"{entry.get('bonus_amount', 0):.2f}",
+                        f"{entry.get('tax_amount', 0):.2f}",
+                        f"{entry.get('net_salary', 0):.2f}"
+                    ]
+                    table_data.append(row)
+                    
+                    # Суммируем итоговую выплату
+                    net_salary = float(entry.get('net_salary', 0))
+                    total_payment += net_salary
+                    
+                    # Собираем данные для графика
+                    dates.append(str(entry.get('calculation_date', 'Н/Д')))
+                    payments.append(net_salary)
+                
+                # Создаем таблицу
                 table = Table(table_data)
-                table.setStyle(TableStyle([
+                
+                # Стиль таблицы
+                table_style = TableStyle([
                     ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 12),
                     ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
                     ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                    ('GRID', (0, 0), (-1, -1), 1, colors.black)
-                ]))
+                    ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                    ('ALIGN', (1, 1), (-1, -1), 'RIGHT'),
+                ])
+                table.setStyle(table_style)
                 
-                elements.append(table)
-                elements.append(Spacer(1, 12))
+                story.append(table)
+                story.append(Spacer(1, 12))
                 
-                # Если включены графики, добавляем диаграмму использования отпусков
-                if include_chart and data:
-                    # Создаем горизонтальную столбчатую диаграмму
-                    plt.figure(figsize=(10, 6))
-                    
-                    teacher_names = [item.get('teacher_name', '') for item in data]
-                    used_days = [item.get('used_vacation_days', 0) for item in data]
-                    remaining_days = [item.get('remaining_vacation_days', 0) for item in data]
-                    planned_days = [item.get('planned_vacation_days', 0) for item in data]
-                    
-                    # Создаем индексы для столбцов
-                    y_pos = np.arange(len(teacher_names))
-                    
-                    # Ширина столбца
-                    bar_width = 0.25
-                    
-                    # Создаем столбцы для использованных, оставшихся и запланированных дней
-                    plt.barh(y_pos - bar_width, used_days, bar_width, label='Использовано')
-                    plt.barh(y_pos, remaining_days, bar_width, label='Осталось')
-                    plt.barh(y_pos + bar_width, planned_days, bar_width, label='Запланировано')
-                    
-                    plt.yticks(y_pos, teacher_names)
-                    plt.xlabel('Количество дней')
-                    plt.title('Использование отпусков преподавателями')
-                    plt.legend()
-                    
-                    # Сохраняем диаграмму
-                    buffer = BytesIO()
-                    plt.savefig(buffer, format='png')
-                    plt.close()
-                    
-                    # Добавляем диаграмму в отчет
-                    buffer.seek(0)
-                    img = Image(buffer, width=450, height=300)
-                    elements.append(img)
-                    
-                # Добавляем детальный список отпусков
-                elements.append(Paragraph("Детальный список отпусков", styles['Heading3']))
-                elements.append(Spacer(1, 12))
+                # Итого
+                story.append(Paragraph(f"Итого к выплате: {total_payment:.2f} руб.", subtitle_style))
                 
-                detailed_table_data = [['Преподаватель', 'Начало', 'Окончание', 'Дней', 'Тип', 'Статус']]
-                
-                # Собираем все отпуска всех преподавателей
-                all_vacations = []
-                for teacher_data in data:
-                    teacher_name = teacher_data.get('teacher_name', '')
-                    for vacation in teacher_data.get('vacations', []):
-                        all_vacations.append({
-                            'teacher_name': teacher_name,
-                            'start_date': vacation.get('start_date', ''),
-                            'end_date': vacation.get('end_date', ''),
-                            'days_count': vacation.get('days_count', 0),
-                            'vacation_type': vacation.get('vacation_type', ''),
-                            'status': vacation.get('status', '')
-                        })
-                
-                # Сортируем отпуска по дате начала
-                all_vacations.sort(key=lambda x: x['start_date'])
-                
-                # Добавляем отпуска в таблицу
-                for vacation in all_vacations:
-                    detailed_table_data.append([
-                        vacation['teacher_name'],
-                        vacation['start_date'].strftime('%d.%m.%Y') if isinstance(vacation['start_date'], datetime.date) else str(vacation['start_date']),
-                        vacation['end_date'].strftime('%d.%m.%Y') if isinstance(vacation['end_date'], datetime.date) else str(vacation['end_date']),
-                        str(vacation['days_count']),
-                        vacation['vacation_type'],
-                        vacation['status']
-                    ])
-                
-                detailed_table = Table(detailed_table_data)
-                detailed_table.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                    ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                    ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                    ('GRID', (0, 0), (-1, -1), 1, colors.black)
-                ]))
-                
-                elements.append(detailed_table)
-            else:
-                # Детальный отчет для одного преподавателя
-                if not data:
-                    elements.append(Paragraph("Нет данных для отображения", styles['Normal']))
-                else:
-                    teacher_data = data[0] if isinstance(data, list) else data
+                # Добавляем график, если запрошено
+                if include_chart and len(payments) > 1:
+                    story.append(Spacer(1, 20))
+                    story.append(Paragraph("Динамика зарплаты за период:", subtitle_style))
                     
-                    # Основная информация о преподавателе
-                    elements.append(Paragraph(f"Отчет по отпускам преподавателя: {teacher_data.get('teacher_name', '')}", styles['Heading2']))
-                    elements.append(Spacer(1, 12))
+                    # Создаем график
+                    drawing = Drawing(400, 200)
+                    bc = VerticalBarChart()
+                    bc.x = 50
+                    bc.y = 50
+                    bc.height = 125
+                    bc.width = 300
+                    bc.data = [payments]
+                    bc.strokeColor = colors.black
                     
-                    # Сводная информация
-                    summary_data = [
-                        ['Параметр', 'Значение'],
-                        ['Всего дней отпуска', str(teacher_data.get('total_vacation_days', 0))],
-                        ['Использовано дней', str(teacher_data.get('used_vacation_days', 0))],
-                        ['Осталось дней', str(teacher_data.get('remaining_vacation_days', 0))],
-                        ['Запланировано дней', str(teacher_data.get('planned_vacation_days', 0))]
-                    ]
+                    bc.valueAxis.valueMin = 0
+                    bc.valueAxis.valueMax = max(payments) * 1.1
+                    bc.valueAxis.valueStep = max(payments) / 10
                     
-                    summary_table = Table(summary_data)
-                    summary_table.setStyle(TableStyle([
-                        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                        ('GRID', (0, 0), (-1, -1), 1, colors.black)
-                    ]))
+                    bc.categoryAxis.labels.boxAnchor = 'ne'
+                    bc.categoryAxis.labels.dx = 8
+                    bc.categoryAxis.labels.dy = -2
+                    bc.categoryAxis.labels.angle = 30
+                    bc.categoryAxis.categoryNames = dates
                     
-                    elements.append(summary_table)
-                    elements.append(Spacer(1, 12))
-                    
-                    # Список отпусков
-                    elements.append(Paragraph("Список отпусков", styles['Heading3']))
-                    elements.append(Spacer(1, 12))
-                    
-                    vacations = teacher_data.get('vacations', [])
-                    
-                    if not vacations:
-                        elements.append(Paragraph("Нет данных об отпусках", styles['Normal']))
-                    else:
-                        # Сортируем отпуска по дате начала
-                        vacations.sort(key=lambda x: x.get('start_date', ''))
-                        
-                        vacations_data = [['Начало', 'Окончание', 'Дней', 'Тип', 'Статус', 'Выплата']]
-                        
-                        for vacation in vacations:
-                            vacations_data.append([
-                                vacation.get('start_date', '').strftime('%d.%m.%Y') if isinstance(vacation.get('start_date', ''), datetime.date) else str(vacation.get('start_date', '')),
-                                vacation.get('end_date', '').strftime('%d.%m.%Y') if isinstance(vacation.get('end_date', ''), datetime.date) else str(vacation.get('end_date', '')),
-                                str(vacation.get('days_count', 0)),
-                                vacation.get('vacation_type', ''),
-                                vacation.get('status', ''),
-                                f"{vacation.get('payment_amount', 0):.2f}" if vacation.get('payment_amount') else '-'
-                            ])
-                        
-                        vacations_table = Table(vacations_data)
-                        vacations_table.setStyle(TableStyle([
-                            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-                            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                            ('GRID', (0, 0), (-1, -1), 1, colors.black)
-                        ]))
-                        
-                        elements.append(vacations_table)
-                        elements.append(Spacer(1, 12))
-                    
-                    # Если включены графики и есть данные об отпусках, добавляем график распределения отпусков по году
-                    if include_chart and vacations:
-                        # Создаем график распределения отпусков по году
-                        plt.figure(figsize=(10, 4))
-                        
-                        # Получаем текущий год
-                        current_year = datetime.datetime.now().year
-                        
-                        # Создаем временную шкалу для года
-                        start_date = datetime.date(current_year, 1, 1)
-                        end_date = datetime.date(current_year, 12, 31)
-                        
-                        # Фильтруем отпуска текущего года
-                        current_year_vacations = [
-                            v for v in vacations 
-                            if isinstance(v.get('start_date', ''), datetime.date) and 
-                            v.get('start_date', '').year == current_year
-                        ]
-                        
-                        # Для каждого отпуска создаем событие на графике
-                        for i, vacation in enumerate(current_year_vacations):
-                            start = vacation.get('start_date', '')
-                            end = vacation.get('end_date', '')
-                            
-                            if isinstance(start, datetime.date) and isinstance(end, datetime.date):
-                                plt.barh(
-                                    i, 
-                                    (end - start).days + 1,  # +1 включая последний день
-                                    left=mdates.date2num(start),
-                                    height=0.6,
-                                    color='skyblue',
-                                    edgecolor='navy'
-                                )
-                                # Добавляем метки с типом отпуска
-                                plt.text(
-                                    mdates.date2num(start) + ((mdates.date2num(end) - mdates.date2num(start)) / 2),
-                                    i,
-                                    vacation.get('vacation_type', ''),
-                                    ha='center',
-                                    va='center',
-                                    color='navy'
-                                )
-                        
-                        # Настраиваем оси
-                        ax = plt.gca()
-                        ax.xaxis_date()
-                        ax.xaxis.set_major_formatter(mdates.DateFormatter('%d.%m'))
-                        ax.xaxis.set_major_locator(mdates.MonthLocator())
-                        
-                        # Устанавливаем метки оси Y (пустые)
-                        plt.yticks([])
-                        
-                        plt.title(f'График отпусков {teacher_data.get("teacher_name", "")} на {current_year} год')
-                        plt.grid(True, axis='x')
-                        
-                        # Сохраняем график
-                        buffer = BytesIO()
-                        plt.savefig(buffer, format='png')
-                        plt.close()
-                        
-                        # Добавляем график в отчет
-                        buffer.seek(0)
-                        img = Image(buffer, width=450, height=150)
-                        elements.append(img)
+                    drawing.add(bc)
+                    story.append(drawing)
             
-            # Создаем PDF документ
-            doc.build(elements)
-            
-            logger.info(f"Данные об отпусках успешно экспортированы в PDF: {file_path}")
+            # Собираем PDF
+            doc.build(story)
+            logging.info(f"PDF-отчет успешно создан: {output_file}")
+            return True
             
         except Exception as e:
-            logger.error(f"Ошибка при экспорте данных об отпусках в PDF: {str(e)}")
-            raise
-
-    def _export_vacation_to_excel(self, data, file_path, title, include_chart=True, is_summary=False):
-        """
-        Экспорт данных об отпусках в Excel формат
-        
-        :param data: Данные об отпусках
-        :param file_path: Путь к создаваемому файлу
-        :param title: Заголовок отчета
-        :param include_chart: Включать ли график отпусков
-        :param is_summary: Является ли отчет сводным
-        """
-        try:
-            # Проверка наличия необходимых библиотек
-            try:
-                import pandas as pd
-                from openpyxl import Workbook
-                from openpyxl.utils.dataframe import dataframe_to_rows
-                from openpyxl.chart import BarChart, Reference
-                from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
-            except ImportError:
-                messagebox.showerror(
-                    "Ошибка импорта", 
-                    "Отсутствуют необходимые библиотеки для экспорта в Excel. Установите их командой:\n"
-                    "pip install pandas openpyxl"
-                )
-                return
-            
-            # Создаем новую книгу Excel
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Отчет об отпусках"
-            
-            # Добавляем заголовок
-            ws['A1'] = title
-            ws['A1'].font = Font(size=14, bold=True)
-            
-            # Добавляем дату создания
-            ws['A2'] = f"Дата создания: {datetime.datetime.now().strftime('%d.%m.%Y %H:%M')}"
-            
-            current_row = 4  # Начальная строка для данных
-            
-            if is_summary:
-                # Сводный отчет для всех преподавателей
-                ws.cell(row=current_row, column=1, value="Сводные данные по отпускам")
-                ws.cell(row=current_row, column=1).font = Font(size=12, bold=True)
-                
-                current_row += 1
-                
-                # Создаем заголовки таблицы
-                headers = ['Преподаватель', 'Всего дней', 'Использовано', 'Осталось', 'Запланировано']
-                for col, header in enumerate(headers, start=1):
-                    cell = ws.cell(row=current_row, column=col, value=header)
-                    cell.font = Font(bold=True)
-                    cell.fill = PatternFill("solid", fgColor="DDDDDD")
-                    cell.alignment = Alignment(horizontal='center')
-                
-                current_row += 1
-                
-                # Добавляем данные
-                for teacher_data in data:
-                    ws.cell(row=current_row, column=1, value=teacher_data.get('teacher_name', ''))
-                    ws.cell(row=current_row, column=2, value=teacher_data.get('total_vacation_days', 0))
-                    ws.cell(row=current_row, column=3, value=teacher_data.get('used_vacation_days', 0))
-                    ws.cell(row=current_row, column=4, value=teacher_data.get('remaining_vacation_days', 0))
-                    ws.cell(row=current_row, column=5, value=teacher_data.get('planned_vacation_days', 0))
-                    current_row += 1
-                
-                # Если нужны графики и есть данные, добавляем диаграмму
-                if include_chart and data:
-                    # Создаем лист для графиков
-                    chart_sheet = wb.create_sheet(title="Графики")
-                    
-                    # Подготавливаем данные для графика
-                    chart_sheet['A1'] = "Преподаватель"
-                    chart_sheet['B1'] = "Использовано"
-                    chart_sheet['C1'] = "Осталось"
-                    chart_sheet['D1'] = "Запланировано"
-                    
-                    for idx, teacher_data in enumerate(data, start=2):
-                        chart_sheet.cell(row=idx, column=1, value=teacher_data.get('teacher_name', ''))
-                        chart_sheet.cell(row=idx, column=2, value=teacher_data.get('used_vacation_days', 0))
-                        chart_sheet.cell(row=idx, column=3, value=teacher_data.get('remaining_vacation_days', 0))
-                        chart_sheet.cell(row=idx, column=4, value=teacher_data.get('planned_vacation_days', 0))
-                    
-                    # Создаем гистограмму
-                    chart = BarChart()
-                    chart.type = "col"
-                    chart.style = 10
-                    chart.title = "Использование отпусков"
-                    chart.y_axis.title = "Количество дней"
-                    chart.x_axis.title = "Преподаватели"
-                    
-                    # Определяем диапазон данных
-                    data_ref = Reference(chart_sheet, min_col=2, min_row=1, max_row=len(data)+1, max_col=4)
-                    cats_ref = Reference(chart_sheet, min_col=1, min_row=2, max_row=len(data)+1)
-                    
-                    chart.add_data(data_ref, titles_from_data=True)
-                    chart.set_categories(cats_ref)
-                    
-                    # Добавляем график на лист
-                    chart_sheet.add_chart(chart, "F2")
-                
-                # Добавляем детальный список отпусков на новый лист
-                details_sheet = wb.create_sheet(title="Детальный список")
-                
-                # Заголовки
-                headers = ['Преподаватель', 'Начало', 'Окончание', 'Дней', 'Тип', 'Статус']
-                for col, header in enumerate(headers, start=1):
-                    cell = details_sheet.cell(row=1, column=col, value=header)
-                    cell.font = Font(bold=True)
-                    cell.fill = PatternFill("solid", fgColor="DDDDDD")
-                    cell.alignment = Alignment(horizontal='center')
-                
-                # Собираем все отпуска всех преподавателей
-                all_vacations = []
-                for teacher_data in data:
-                    teacher_name = teacher_data.get('teacher_name', '')
-                    for vacation in teacher_data.get('vacations', []):
-                        all_vacations.append({
-                            'teacher_name': teacher_name,
-                            'start_date': vacation.get('start_date', ''),
-                            'end_date': vacation.get('end_date', ''),
-                            'days_count': vacation.get('days_count', 0),
-                            'vacation_type': vacation.get('vacation_type', ''),
-                            'status': vacation.get('status', '')
-                        })
-                
-                # Сортируем отпуска по дате начала
-                all_vacations.sort(key=lambda x: x['start_date'])
-                
-                # Добавляем отпуска в таблицу
-                for idx, vacation in enumerate(all_vacations, start=2):
-                    details_sheet.cell(row=idx, column=1, value=vacation['teacher_name'])
-                    
-                    # Форматируем даты
-                    start_date = vacation['start_date']
-                    end_date = vacation['end_date']
-                    
-                    if isinstance(start_date, datetime.date):
-                        details_sheet.cell(row=idx, column=2, value=start_date)
-                    else:
-                        details_sheet.cell(row=idx, column=2, value=str(start_date))
-                    
-                    if isinstance(end_date, datetime.date):
-                        details_sheet.cell(row=idx, column=3, value=end_date)
-                    else:
-                        details_sheet.cell(row=idx, column=3, value=str(end_date))
-                    
-                    details_sheet.cell(row=idx, column=4, value=vacation['days_count'])
-                    details_sheet.cell(row=idx, column=5, value=vacation['vacation_type'])
-                    details_sheet.cell(row=idx, column=6, value=vacation['status'])
-            else:
-                # Детальный отчет для одного преподавателя
-                if not data:
-                    ws.cell(row=current_row, column=1, value="Нет данных для отображения")
-                else:
-                    teacher_data = data[0] if isinstance(data, list) else data
-                    
-                    # Заголовок с именем преподавателя
-                    ws.cell(row=current_row, column=1, value=f"Отчет по отпускам преподавателя: {teacher_data.get('teacher_name', '')}")
-                    ws.cell(row=current_row, column=1).font = Font(size=12, bold=True)
-                    
-                    current_row += 2
-                    
-                    # Сводная информация
-                    ws.cell(row=current_row, column=1, value="Сводная информация")
-                    ws.cell(row=current_row, column=1).font = Font(bold=True)
-                    
-                    current_row += 1
-                    
-                    # Заголовки таблицы
-                    ws.cell(row=current_row, column=1, value="Параметр")
-                    ws.cell(row=current_row, column=2, value="Значение")
-                    ws.cell(row=current_row, column=1).font = Font(bold=True)
-                    ws.cell(row=current_row, column=2).font = Font(bold=True)
-                    
-                    current_row += 1
-                    
-                    # Данные
-                    summary_items = [
-                        ('Всего дней отпуска', teacher_data.get('total_vacation_days', 0)),
-                        ('Использовано дней', teacher_data.get('used_vacation_days', 0)),
-                        ('Осталось дней', teacher_data.get('remaining_vacation_days', 0)),
-                        ('Запланировано дней', teacher_data.get('planned_vacation_days', 0))
-                    ]
-                    
-                    for item in summary_items:
-                        ws.cell(row=current_row, column=1, value=item[0])
-                        ws.cell(row=current_row, column=2, value=item[1])
-                        current_row += 1
-                    
-                    current_row += 2
-                    
-                    # Список отпусков
-                    ws.cell(row=current_row, column=1, value="Список отпусков")
-                    ws.cell(row=current_row, column=1).font = Font(bold=True)
-                    
-                    current_row += 1
-                    
-                    vacations = teacher_data.get('vacations', [])
-                    
-                    if not vacations:
-                        ws.cell(row=current_row, column=1, value="Нет данных об отпусках")
-                    else:
-                        # Заголовки таблицы отпусков
-                        headers = ['Начало', 'Окончание', 'Дней', 'Тип', 'Статус', 'Выплата']
-                        for col, header in enumerate(headers, start=1):
-                            cell = ws.cell(row=current_row, column=col, value=header)
-                            cell.font = Font(bold=True)
-                        
-                        current_row += 1
-                        
-                        # Сортируем отпуска по дате начала
-                        vacations.sort(key=lambda x: x.get('start_date', ''))
-                        
-                        # Добавляем данные об отпусках
-                        for vacation in vacations:
-                            # Форматируем даты
-                            start_date = vacation.get('start_date', '')
-                            end_date = vacation.get('end_date', '')
-                            
-                            if isinstance(start_date, datetime.date):
-                                ws.cell(row=current_row, column=1, value=start_date)
-                            else:
-                                ws.cell(row=current_row, column=1, value=str(start_date))
-                            
-                            if isinstance(end_date, datetime.date):
-                                ws.cell(row=current_row, column=2, value=end_date)
-                            else:
-                                ws.cell(row=current_row, column=2, value=str(end_date))
-                            
-                            ws.cell(row=current_row, column=3, value=vacation.get('days_count', 0))
-                            ws.cell(row=current_row, column=4, value=vacation.get('vacation_type', ''))
-                            ws.cell(row=current_row, column=5, value=vacation.get('status', ''))
-                            
-                            payment = vacation.get('payment_amount')
-                            if payment:
-                                ws.cell(row=current_row, column=6, value=payment)
-                                ws.cell(row=current_row, column=6).number_format = '#,##0.00'
-                            else:
-                                ws.cell(row=current_row, column=6, value='-')
-                            
-                            current_row += 1
-                    
-                    # Если нужны графики и есть данные об отпусках, добавляем график
-                    if include_chart and vacations:
-                        # Создаем лист для графика
-                        chart_sheet = wb.create_sheet(title="График отпусков")
-                        
-                        # Заголовок
-                        chart_sheet['A1'] = f"График отпусков {teacher_data.get('teacher_name', '')}"
-                        chart_sheet['A1'].font = Font(size=14, bold=True)
-                        
-                        # Создаем календарь на текущий год
-                        current_year = datetime.datetime.now().year
-                        chart_sheet['A3'] = "Месяц"
-                        
-                        # Добавляем месяцы
-                        for month in range(1, 13):
-                            chart_sheet.cell(row=3, column=month+1, value=calendar.month_name[month])
-                        
-                        current_row = 4
-                        
-                        for i, vacation in enumerate(vacations, start=1):
-                            start_date = vacation.get('start_date', '')
-                            end_date = vacation.get('end_date', '')
-                            
-                            if isinstance(start_date, datetime.date) and isinstance(end_date, datetime.date):
-                                if start_date.year == current_year or end_date.year == current_year:
-                                    # Добавляем строку для отпуска
-                                    row = current_row + i - 1
-                                    chart_sheet.cell(row=row, column=1, value=vacation.get('vacation_type', ''))
-                                    
-                                    # Определяем месяцы отпуска в текущем году
-                                    start_month = max(1, start_date.month if start_date.year == current_year else 1)
-                                    end_month = min(12, end_date.month if end_date.year == current_year else 12)
-                                    
-                                    # Заполняем ячейки для месяцев отпуска
-                                    for month in range(start_month, end_month + 1):
-                                        # Отмечаем отпуск в календаре
-                                        cell = chart_sheet.cell(row=row, column=month+1)
-                                        cell.value = 'X'
-                                        cell.alignment = Alignment(horizontal='center')
-                                        cell.fill = PatternFill("solid", fgColor="90EE90")  # Светло-зеленый
-                    
-                    # Сохраняем Excel-файл
-                    wb.save(file_path)
-                    
-                    logger.info(f"Данные об отпусках успешно экспортированы в Excel: {file_path}")
-        
-        except Exception as e:
-            logger.error(f"Ошибка при экспорте данных об отпусках в Excel: {str(e)}")
-            raise
-
-    def _export_vacation_to_word(self, data, file_path, title, include_chart=True, is_summary=False):
-        """
-        Экспорт данных об отпусках в Word формат
-        
-        :param data: Данные об отпусках
-        :param file_path: Путь к создаваемому файлу
-        :param title: Заголовок отчета
-        :param include_chart: Включать ли график отпусков
-        :param is_summary: Является ли отчет сводным
-        """
-        try:
-            # Проверка наличия необходимых библиотек
-            try:
-                from docx import Document
-                from docx.shared import Pt, Cm, RGBColor
-                from docx.enum.text import WD_ALIGN_PARAGRAPH
-                from docx.enum.table import WD_TABLE_ALIGNMENT
-                import matplotlib.pyplot as plt
-                import matplotlib.dates as mdates
-                import numpy as np
-            except ImportError:
-                messagebox.showerror(
-                    "Ошибка импорта", 
-                    "Отсутствуют необходимые библиотеки для экспорта в Word. Установите их командой:\n"
-                    "pip install python-docx matplotlib numpy"
-                )
-                return
-            
-            # Создаем новый документ Word
-            doc = Document()
-            
-            # Заголовок отчета
-            doc.add_heading(title, level=1)
-            
-            # Дата создания отчета
-            p = doc.add_paragraph(f"Дата создания: {datetime.datetime.now().strftime('%d.%m.%Y %H:%M')}")
-            
-            if is_summary:
-                # Сводный отчет для всех преподавателей
-                doc.add_heading("Сводные данные по отпускам", level=2)
-                
-                # Создаем таблицу
-                table = doc.add_table(rows=1, cols=5)
-                table.style = 'Table Grid'
-                
-                # Заголовки таблицы
-                header_cells = table.rows[0].cells
-                header_cells[0].text = "Преподаватель"
-                header_cells[1].text = "Всего дней"
-                header_cells[2].text = "Использовано"
-                header_cells[3].text = "Осталось"
-                header_cells[4].text = "Запланировано"
-                
-                # Добавляем данные в таблицу
-                for teacher_data in data:
-                    row_cells = table.add_row().cells
-                    row_cells[0].text = teacher_data.get('teacher_name', '')
-                    row_cells[1].text = str(teacher_data.get('total_vacation_days', 0))
-                    row_cells[2].text = str(teacher_data.get('used_vacation_days', 0))
-                    row_cells[3].text = str(teacher_data.get('remaining_vacation_days', 0))
-                    row_cells[4].text = str(teacher_data.get('planned_vacation_days', 0))
-                
-                # Если включены графики, добавляем диаграмму использования отпусков
-                if include_chart and data:
-                    doc.add_heading("Использование отпусков преподавателями", level=3)
-                    
-                    # Создаем горизонтальную столбчатую диаграмму
-                    plt.figure(figsize=(10, 6))
-                    
-                    teacher_names = [item.get('teacher_name', '') for item in data]
-                    used_days = [item.get('used_vacation_days', 0) for item in data]
-                    remaining_days = [item.get('remaining_vacation_days', 0) for item in data]
-                    planned_days = [item.get('planned_vacation_days', 0) for item in data]
-                    
-                    # Создаем индексы для столбцов
-                    y_pos = np.arange(len(teacher_names))
-                    
-                    # Ширина столбца
-                    bar_width = 0.25
-                    
-                    # Создаем столбцы для использованных, оставшихся и запланированных дней
-                    plt.barh(y_pos - bar_width, used_days, bar_width, label='Использовано')
-                    plt.barh(y_pos, remaining_days, bar_width, label='Осталось')
-                    plt.barh(y_pos + bar_width, planned_days, bar_width, label='Запланировано')
-                    
-                    plt.yticks(y_pos, teacher_names)
-                    plt.xlabel('Количество дней')
-                    plt.title('Использование отпусков преподавателями')
-                    plt.legend()
-                    
-                    # Сохраняем график во временный файл
-                    chart_path = os.path.join(os.path.dirname(file_path), "temp_vacation_chart.png")
-                    plt.savefig(chart_path, format='png', dpi=300)
-                    plt.close()
-                    
-                    # Добавляем изображение в документ
-                    doc.add_picture(chart_path, width=Cm(15))
-                    
-                    # Удаляем временный файл
-                    if os.path.exists(chart_path):
-                        os.remove(chart_path)
-                
-                # Добавляем детальный список отпусков
-                doc.add_heading("Детальный список отпусков", level=3)
-                
-                # Создаем таблицу
-                details_table = doc.add_table(rows=1, cols=6)
-                details_table.style = 'Table Grid'
-                
-                # Заголовки таблицы
-                header_cells = details_table.rows[0].cells
-                header_cells[0].text = "Преподаватель"
-                header_cells[1].text = "Начало"
-                header_cells[2].text = "Окончание"
-                header_cells[3].text = "Дней"
-                header_cells[4].text = "Тип"
-                header_cells[5].text = "Статус"
-                
-                # Собираем все отпуска всех преподавателей
-                all_vacations = []
-                for teacher_data in data:
-                    teacher_name = teacher_data.get('teacher_name', '')
-                    for vacation in teacher_data.get('vacations', []):
-                        all_vacations.append({
-                            'teacher_name': teacher_name,
-                            'start_date': vacation.get('start_date', ''),
-                            'end_date': vacation.get('end_date', ''),
-                            'days_count': vacation.get('days_count', 0),
-                            'vacation_type': vacation.get('vacation_type', ''),
-                            'status': vacation.get('status', '')
-                        })
-                
-                # Сортируем отпуска по дате начала
-                all_vacations.sort(key=lambda x: x['start_date'])
-                
-                # Добавляем отпуска в таблицу
-                for vacation in all_vacations:
-                    row_cells = details_table.add_row().cells
-                    row_cells[0].text = vacation['teacher_name']
-                    
-                    # Форматируем даты
-                    start_date = vacation['start_date']
-                    end_date = vacation['end_date']
-                    
-                    if isinstance(start_date, datetime.date):
-                        row_cells[1].text = start_date.strftime('%d.%m.%Y')
-                    else:
-                        row_cells[1].text = str(start_date)
-                    
-                    if isinstance(end_date, datetime.date):
-                        row_cells[2].text = end_date.strftime('%d.%m.%Y')
-                    else:
-                        row_cells[2].text = str(end_date)
-                    
-                    row_cells[3].text = str(vacation['days_count'])
-                    row_cells[4].text = vacation['vacation_type']
-                    row_cells[5].text = vacation['status']
-            else:
-                # Детальный отчет для одного преподавателя
-                if not data:
-                    doc.add_paragraph("Нет данных для отображения")
-                else:
-                    teacher_data = data[0] if isinstance(data, list) else data
-                    
-                    # Основная информация о преподавателе
-                    doc.add_heading(f"Отчет по отпускам преподавателя: {teacher_data.get('teacher_name', '')}", level=2)
-                    
-                    # Сводная информация
-                    doc.add_heading("Сводная информация", level=3)
-                    
-                    # Создаем таблицу для сводной информации
-                    summary_table = doc.add_table(rows=1, cols=2)
-                    summary_table.style = 'Table Grid'
-                    
-                    # Заголовки таблицы
-                    header_cells = summary_table.rows[0].cells
-                    header_cells[0].text = "Параметр"
-                    header_cells[1].text = "Значение"
-                    
-                    # Добавляем данные в таблицу
-                    summary_items = [
-                        ('Всего дней отпуска', str(teacher_data.get('total_vacation_days', 0))),
-                        ('Использовано дней', str(teacher_data.get('used_vacation_days', 0))),
-                        ('Осталось дней', str(teacher_data.get('remaining_vacation_days', 0))),
-                        ('Запланировано дней', str(teacher_data.get('planned_vacation_days', 0)))
-                    ]
-                    
-                    for param, value in summary_items:
-                        row_cells = summary_table.add_row().cells
-                        row_cells[0].text = param
-                        row_cells[1].text = value
-                    
-                    # Список отпусков
-                    doc.add_heading("Список отпусков", level=3)
-                    
-                    vacations = teacher_data.get('vacations', [])
-                    
-                    if not vacations:
-                        doc.add_paragraph("Нет данных об отпусках")
-                    else:
-                        # Создаем таблицу для отпусков
-                        vacations_table = doc.add_table(rows=1, cols=6)
-                        vacations_table.style = 'Table Grid'
-                        
-                        # Заголовки таблицы
-                        header_cells = vacations_table.rows[0].cells
-                        header_cells[0].text = "Начало"
-                        header_cells[1].text = "Окончание"
-                        header_cells[2].text = "Дней"
-                        header_cells[3].text = "Тип"
-                        header_cells[4].text = "Статус"
-                        header_cells[5].text = "Выплата"
-                        
-                        # Сортируем отпуска по дате начала
-                        vacations.sort(key=lambda x: x.get('start_date', ''))
-                        
-                        # Добавляем отпуска в таблицу
-                        for vacation in vacations:
-                            row_cells = vacations_table.add_row().cells
-                            
-                            # Форматируем даты
-                            start_date = vacation.get('start_date', '')
-                            end_date = vacation.get('end_date', '')
-                            
-                            if isinstance(start_date, datetime.date):
-                                row_cells[0].text = start_date.strftime('%d.%m.%Y')
-                            else:
-                                row_cells[0].text = str(start_date)
-                            
-                            if isinstance(end_date, datetime.date):
-                                row_cells[1].text = end_date.strftime('%d.%m.%Y')
-                            else:
-                                row_cells[1].text = str(end_date)
-                            
-                            row_cells[2].text = str(vacation.get('days_count', 0))
-                            row_cells[3].text = vacation.get('vacation_type', '')
-                            row_cells[4].text = vacation.get('status', '')
-                            
-                            payment = vacation.get('payment_amount')
-                            if payment:
-                                row_cells[5].text = f"{payment:.2f} руб."
-                            else:
-                                row_cells[5].text = '-'
-                    
-                    # Если включены графики и есть данные об отпусках, добавляем график распределения отпусков по году
-                    if include_chart and vacations:
-                        doc.add_heading("График отпусков", level=3)
-                        
-                        # Получаем текущий год
-                        current_year = datetime.datetime.now().year
-                        
-                        # Фильтруем отпуска текущего года
-                        current_year_vacations = [
-                            v for v in vacations 
-                            if isinstance(v.get('start_date', ''), datetime.date) and 
-                            v.get('start_date', '').year == current_year
-                        ]
-                        
-                        if current_year_vacations:
-                            # Создаем график распределения отпусков по году
-                            plt.figure(figsize=(10, 4))
-                            
-                            # Для каждого отпуска создаем событие на графике
-                            for i, vacation in enumerate(current_year_vacations):
-                                start = vacation.get('start_date', '')
-                                end = vacation.get('end_date', '')
-                                
-                                if isinstance(start, datetime.date) and isinstance(end, datetime.date):
-                                    plt.barh(
-                                        i, 
-                                        (end - start).days + 1,  # +1 включая последний день
-                                        left=mdates.date2num(start),
-                                        height=0.6,
-                                        color='skyblue',
-                                        edgecolor='navy'
-                                    )
-                                    # Добавляем метки с типом отпуска
-                                    plt.text(
-                                        mdates.date2num(start) + ((mdates.date2num(end) - mdates.date2num(start)) / 2),
-                                        i,
-                                        vacation.get('vacation_type', ''),
-                                        ha='center',
-                                        va='center',
-                                        color='navy'
-                                    )
-                            
-                            # Настраиваем оси
-                            ax = plt.gca()
-                            ax.xaxis_date()
-                            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d.%m'))
-                            ax.xaxis.set_major_locator(mdates.MonthLocator())
-                            
-                            # Устанавливаем метки оси Y (пустые)
-                            plt.yticks([])
-                            
-                            plt.title(f'График отпусков {teacher_data.get("teacher_name", "")} на {current_year} год')
-                            plt.grid(True, axis='x')
-                            
-                            # Сохраняем график во временный файл
-                            chart_path = os.path.join(os.path.dirname(file_path), "temp_vacation_chart.png")
-                            plt.savefig(chart_path, format='png', dpi=300)
-                            plt.close()
-                            
-                            # Добавляем изображение в документ
-                            doc.add_picture(chart_path, width=Cm(15))
-                            
-                            # Удаляем временный файл
-                            if os.path.exists(chart_path):
-                                os.remove(chart_path)
-            
-            # Сохраняем Word-файл
-            doc.save(file_path)
-            
-            logger.info(f"Данные об отпусках успешно экспортированы в Word: {file_path}")
-            
-        except Exception as e:
-            logger.error(f"Ошибка при экспорте данных об отпусках в Word: {str(e)}")
-            raise
-
-    def _export_calendar_to_pdf(self, data, file_path, title, include_chart=True):
-        """
-        Экспорт календарного графика отпусков в PDF формат
-        
-        :param data: Данные для календарного графика
-        :param file_path: Путь к создаваемому файлу
-        :param title: Заголовок отчета
-        :param include_chart: Включать ли визуальный график
-        """
-        try:
-            # Проверка наличия необходимых библиотек
-            try:
-                from reportlab.lib.pagesizes import A4, landscape
-                from reportlab.lib import colors
-                from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
-                from reportlab.lib.styles import getSampleStyleSheet
-                import matplotlib.pyplot as plt
-                import matplotlib.dates as mdates
-                import calendar
-                from io import BytesIO
-                import numpy as np
-            except ImportError:
-                messagebox.showerror(
-                    "Ошибка импорта", 
-                    "Отсутствуют необходимые библиотеки для экспорта в PDF. Установите их командой:\n"
-                    "pip install reportlab matplotlib numpy"
-                )
-                return
-            
-            # Создание PDF документа в альбомной ориентации
-            doc = SimpleDocTemplate(file_path, pagesize=landscape(A4))
-            styles = getSampleStyleSheet()
-            elements = []
-            
-            # Заголовок отчета
-            elements.append(Paragraph(title, styles['Title']))
-            elements.append(Spacer(1, 12))
-            
-            # Дата создания отчета
-            elements.append(Paragraph(f"Дата создания: {datetime.datetime.now().strftime('%d.%m.%Y %H:%M')}", styles['Normal']))
-            elements.append(Spacer(1, 12))
-            
-            # Определяем текущий год
-            current_year = datetime.datetime.now().year
-            
-            # Создаем календарную таблицу отпусков
-            elements.append(Paragraph(f"Календарный график отпусков на {current_year} год", styles['Heading2']))
-            elements.append(Spacer(1, 12))
-            
-            # Получаем список отпусков из данных
-            vacations_by_teacher = {}
-            
-            for item in data:
-                teacher_name = item.get('teacher_name', '')
-                vacations = item.get('vacations', [])
-                
-                # Фильтруем отпуска текущего года
-                current_year_vacations = []
-                for vacation in vacations:
-                    start_date = vacation.get('start_date', '')
-                    end_date = vacation.get('end_date', '')
-                    
-                    if isinstance(start_date, datetime.date) and isinstance(end_date, datetime.date):
-                        if (start_date.year == current_year) or (end_date.year == current_year):
-                            current_year_vacations.append(vacation)
-                
-                if current_year_vacations:
-                    vacations_by_teacher[teacher_name] = current_year_vacations
-            
-            # Создаем таблицу с календарем отпусков
-            # Заголовок таблицы: ФИО и месяцы
-            table_data = [['Преподаватель'] + list(calendar.month_name)[1:]]
-            
-            # Для каждого преподавателя создаем строку в таблице
-            for teacher_name, vacations in vacations_by_teacher.items():
-                row = [teacher_name]
-                
-                # Для каждого месяца определяем, есть ли отпуск
-                for month in range(1, 13):
-                    cell_text = ""
-                    
-                    for vacation in vacations:
-                        start_date = vacation.get('start_date', '')
-                        end_date = vacation.get('end_date', '')
-                        
-                        if isinstance(start_date, datetime.date) and isinstance(end_date, datetime.date):
-                            # Определяем, попадает ли месяц в период отпуска
-                            if ((start_date.year < current_year or (start_date.year == current_year and start_date.month <= month)) and
-                                (end_date.year > current_year or (end_date.year == current_year and end_date.month >= month))):
-                                
-                                # Определяем дни отпуска в этом месяце
-                                days_in_month = calendar.monthrange(current_year, month)[1]
-                                
-                                month_start = datetime.date(current_year, month, 1)
-                                month_end = datetime.date(current_year, month, days_in_month)
-                                
-                                vacation_start_in_month = max(start_date, month_start)
-                                vacation_end_in_month = min(end_date, month_end)
-                                
-                                # Если начало и конец отпуска в пределах месяца
-                                if vacation_start_in_month <= vacation_end_in_month:
-                                    # Добавляем информацию об отпуске в ячейку
-                                    days_str = f"{vacation_start_in_month.day}-{vacation_end_in_month.day}"
-                                    vacation_type = vacation.get('vacation_type', '')
-                                    
-                                    if cell_text:
-                                        cell_text += "\n"
-                                    cell_text += f"{days_str} ({vacation_type})"
-                    
-                    row.append(cell_text)
-                
-                table_data.append(row)
-            
-            # Если нет данных, добавляем пустую строку
-            if len(table_data) == 1:
-                table_data.append(['Нет данных'] + [''] * 12)
-            
-            # Создаем таблицу
-            table = Table(table_data, colWidths=[120] + [50] * 12)
-            
-            # Стиль таблицы
-            table_style = [
-                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('BACKGROUND', (0, 1), (0, -1), colors.lightgrey),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ]
-            
-            # Для каждой ячейки с данными об отпуске устанавливаем фон
-            for i, row in enumerate(table_data):
-                if i > 0:  # Пропускаем заголовок
-                    for j, cell in enumerate(row):
-                        if j > 0 and cell:  # Пропускаем столбец с именами и пустые ячейки
-                            table_style.append(('BACKGROUND', (j, i), (j, i), colors.lightblue))
-            
-            table.setStyle(TableStyle(table_style))
-            
-            elements.append(table)
-            
-            # Если включены графики, добавляем визуальное представление графика отпусков
-            if include_chart and vacations_by_teacher:
-                elements.append(Spacer(1, 20))
-                elements.append(Paragraph("Визуализация графика отпусков", styles['Heading3']))
-                elements.append(Spacer(1, 12))
-                
-                # Создаем график Ганта для отпусков
-                plt.figure(figsize=(12, 6))
-                
-                # Собираем все отпуска для графика
-                all_vacations = []
-                for teacher_name, vacations in vacations_by_teacher.items():
-                    for vacation in vacations:
-                        all_vacations.append({
-                            'teacher': teacher_name,
-                            'start': vacation.get('start_date', ''),
-                            'end': vacation.get('end_date', ''),
-                            'type': vacation.get('vacation_type', '')
-                        })
-                
-                # Сортируем по преподавателям и дате начала
-                all_vacations.sort(key=lambda x: (x['teacher'], x['start']))
-                
-                # Создаем список уникальных преподавателей в том же порядке
-                teachers = []
-                for v in all_vacations:
-                    if v['teacher'] not in teachers:
-                        teachers.append(v['teacher'])
-                
-                # Цвета для разных типов отпусков
-                vacation_types = set(v['type'] for v in all_vacations)
-                colors_dict = {}
-                
-                # Назначаем цвета для каждого типа отпуска
-                for i, v_type in enumerate(vacation_types):
-                    colors_dict[v_type] = plt.cm.Paired(i / len(vacation_types))
-                
-                # Создаем график для каждого отпуска
-                for i, vacation in enumerate(all_vacations):
-                    if isinstance(vacation['start'], datetime.date) and isinstance(vacation['end'], datetime.date):
-                        # Проверяем, что отпуск относится к текущему году
-                        if (vacation['start'].year == current_year) or (vacation['end'].year == current_year):
-                            # Индекс преподавателя
-                            teacher_idx = teachers.index(vacation['teacher'])
-                            
-                            # Даты начала и окончания отпуска в текущем году
-                            start_date = max(vacation['start'], datetime.date(current_year, 1, 1))
-                            end_date = min(vacation['end'], datetime.date(current_year, 12, 31))
-                            
-                            plt.barh(
-                                teacher_idx,
-                                (end_date - start_date).days + 1,
-                                left=mdates.date2num(start_date),
-                                height=0.5,
-                                color=colors_dict.get(vacation['type'], 'skyblue'),
-                                alpha=0.8,
-                                edgecolor='navy'
-                            )
-                
-                # Настраиваем оси
-                ax = plt.gca()
-                ax.xaxis_date()
-                
-                # Устанавливаем формат дат по месяцам
-                ax.xaxis.set_major_locator(mdates.MonthLocator())
-                ax.xaxis.set_major_formatter(mdates.DateFormatter('%b'))
-                
-                # Добавляем метки месяцев
-                plt.xlabel('Месяц')
-                
-                # Устанавливаем имена преподавателей на оси Y
-                plt.yticks(range(len(teachers)), teachers)
-                
-                plt.title(f'График отпусков на {current_year} год')
-                plt.grid(True, axis='x')
-                
-                # Добавляем легенду для типов отпусков
-                legend_patches = [
-                    plt.Rectangle((0, 0), 1, 1, color=color, alpha=0.8)
-                    for color in colors_dict.values()
-                ]
-                plt.legend(legend_patches, colors_dict.keys(), loc='upper right')
-                
-                # Сохраняем график
-                buffer = BytesIO()
-                plt.savefig(buffer, format='png', dpi=300, bbox_inches='tight')
-                plt.close()
-                
-                # Добавляем диаграмму в отчет
-                buffer.seek(0)
-                img = Image(buffer, width=700, height=300)
-                elements.append(img)
-            
-            doc.build(elements)
-            
-            logger.info(f"Календарный график отпусков успешно экспортирован в PDF: {file_path}")
-        
-        except Exception as e:
-            logger.error(f"Ошибка при экспорте календарного графика отпусков в PDF: {str(e)}")
-            raise
-
-    def _export_calendar_to_excel(self, data, file_path, title, include_chart=True):
-        """
-        Экспорт календарного графика отпусков в Excel формат
-        
-        :param data: Данные для календарного графика
-        :param file_path: Путь к создаваемому файлу
-        :param title: Заголовок отчета
-        :param include_chart: Включать ли визуальный график
-        """
-        try:
-            # Проверка наличия необходимых библиотек
-            try:
-                from openpyxl import Workbook
-                from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-                from openpyxl.chart import BarChart, Reference
-                import calendar
-            except ImportError:
-                messagebox.showerror(
-                    "Ошибка импорта", 
-                    "Отсутствуют необходимые библиотеки для экспорта в Excel. Установите их командой:\n"
-                    "pip install openpyxl"
-                )
-                return
-            
-            # Создаем новую книгу Excel
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Календарный график"
-            
-            # Добавляем заголовок
-            ws['A1'] = title
-            ws['A1'].font = Font(size=14, bold=True)
-            
-            # Добавляем дату создания
-            ws['A2'] = f"Дата создания: {datetime.datetime.now().strftime('%d.%m.%Y %H:%M')}"
-            
-            # Определяем текущий год
-            current_year = datetime.datetime.now().year
-            
-            # Создаем подзаголовок
-            ws['A4'] = f"Календарный график отпусков на {current_year} год"
-            ws['A4'].font = Font(size=12, bold=True)
-            
-            # Заголовки таблицы
-            row_start = 6
-            ws.cell(row=row_start, column=1, value="Преподаватель")
-            
-            for month in range(1, 13):
-                ws.cell(row=row_start, column=month+1, value=calendar.month_name[month])
-            
-            # Форматирование заголовков
-            for col in range(1, 14):
-                cell = ws.cell(row=row_start, column=col)
-                cell.font = Font(bold=True)
-                cell.fill = PatternFill("solid", fgColor="DDDDDD")
-                cell.alignment = Alignment(horizontal='center', vertical='center')
-                
-                # Устанавливаем ширину столбцов
-                if col == 1:
-                    ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = 25
-                else:
-                    ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = 15
-            
-            # Получаем список отпусков из данных
-            vacations_by_teacher = {}
-            
-            for item in data:
-                teacher_name = item.get('teacher_name', '')
-                vacations = item.get('vacations', [])
-                
-                # Фильтруем отпуска текущего года
-                current_year_vacations = []
-                for vacation in vacations:
-                    start_date = vacation.get('start_date', '')
-                    end_date = vacation.get('end_date', '')
-                    
-                    if isinstance(start_date, datetime.date) and isinstance(end_date, datetime.date):
-                        if (start_date.year == current_year) or (end_date.year == current_year):
-                            current_year_vacations.append(vacation)
-                
-                if current_year_vacations:
-                    vacations_by_teacher[teacher_name] = current_year_vacations
-            
-            # Добавляем данные в таблицу
-            current_row = row_start + 1
-            
-            for teacher_name, vacations in vacations_by_teacher.items():
-                ws.cell(row=current_row, column=1, value=teacher_name)
-                
-                # Для каждого месяца определяем, есть ли отпуск
-                for month in range(1, 13):
-                    cell_text = ""
-                    
-                    for vacation in vacations:
-                        start_date = vacation.get('start_date', '')
-                        end_date = vacation.get('end_date', '')
-                        
-                        if isinstance(start_date, datetime.date) and isinstance(end_date, datetime.date):
-                            # Определяем, попадает ли месяц в период отпуска
-                            if ((start_date.year < current_year or (start_date.year == current_year and start_date.month <= month)) and
-                                (end_date.year > current_year or (end_date.year == current_year and end_date.month >= month))):
-                                
-                                # Определяем дни отпуска в этом месяце
-                                days_in_month = calendar.monthrange(current_year, month)[1]
-                                
-                                month_start = datetime.date(current_year, month, 1)
-                                month_end = datetime.date(current_year, month, days_in_month)
-                                
-                                vacation_start_in_month = max(start_date, month_start)
-                                vacation_end_in_month = min(end_date, month_end)
-                                
-                                # Если начало и конец отпуска в пределах месяца
-                                if vacation_start_in_month <= vacation_end_in_month:
-                                    # Добавляем информацию об отпуске в ячейку
-                                    days_str = f"{vacation_start_in_month.day}-{vacation_end_in_month.day}"
-                                    vacation_type = vacation.get('vacation_type', '')
-                                    
-                                    if cell_text:
-                                        cell_text += "\n"
-                                    cell_text += f"{days_str} ({vacation_type})"
-                    
-                    cell = ws.cell(row=current_row, column=month+1, value=cell_text)
-                    
-                    # Форматирование ячейки с данными об отпуске
-                    if cell_text:
-                        cell.fill = PatternFill("solid", fgColor="B3E5FC")  # Светло-голубой цвет
-                        cell.alignment = Alignment(wrap_text=True, horizontal='center', vertical='center')
-                
-                current_row += 1
-            
-            # Если нет данных, добавляем пустую строку
-            if current_row == row_start + 1:
-                ws.cell(row=current_row, column=1, value="Нет данных")
-                current_row += 1
-            
-            # Добавляем таблицу с пояснениями типов отпусков
-            current_row += 2
-            
-            ws.cell(row=current_row, column=1, value="Типы отпусков:")
-            ws.cell(row=current_row, column=1).font = Font(bold=True)
-            
-            # Собираем все типы отпусков
-            vacation_types = set()
-            for vacations in vacations_by_teacher.values():
-                for vacation in vacations:
-                    vacation_types.add(vacation.get('vacation_type', ''))
-            
-            # Добавляем описание для каждого типа
-            for i, v_type in enumerate(sorted(vacation_types)):
-                if v_type:  # Пропускаем пустые типы
-                    ws.cell(row=current_row + 1 + i, column=1, value=v_type)
-                    
-                    # Добавляем описание типа отпуска (можно расширить в будущем)
-                    description = "Ежегодный основной отпуск" if v_type == "Основной" else \
-                                "Дополнительный отпуск" if v_type == "Дополнительный" else \
-                                "Отпуск без сохранения заработной платы" if v_type == "За свой счет" else \
-                                "Учебный отпуск" if v_type == "Учебный" else \
-                                "Описание отсутствует"
-                    
-                    ws.cell(row=current_row + 1 + i, column=2, value=description)
-            
-            # Сохраняем Excel-файл
-            wb.save(file_path)
-            
-            logger.info(f"Календарный график отпусков успешно экспортирован в Excel: {file_path}")
-            
-        except Exception as e:
-            logger.error(f"Ошибка при экспорте календарного графика отпусков в Excel: {str(e)}")
-            raise
-
-    def _export_calendar_to_word(self, data, file_path, title, include_chart=True):
-        """
-        Экспорт календарного графика отпусков в Word формат
-        
-        :param data: Данные для календарного графика
-        :param file_path: Путь к создаваемому файлу
-        :param title: Заголовок отчета
-        :param include_chart: Включать ли визуальный график
-        """
-        try:
-            # Проверка наличия необходимых библиотек
-            try:
-                from docx import Document
-                from docx.shared import Pt, Cm, RGBColor
-                from docx.enum.text import WD_ALIGN_PARAGRAPH
-                from docx.enum.table import WD_TABLE_ALIGNMENT
-                import calendar
-                import matplotlib.pyplot as plt
-                import matplotlib.dates as mdates
-            except ImportError:
-                messagebox.showerror(
-                    "Ошибка импорта", 
-                    "Отсутствуют необходимые библиотеки для экспорта в Word. Установите их командой:\n"
-                    "pip install python-docx matplotlib"
-                )
-                return
-            
-            # Создаем новый документ Word
-            doc = Document()
-            
-            # Заголовок отчета
-            doc.add_heading(title, level=1)
-            
-            # Дата создания отчета
-            p = doc.add_paragraph(f"Дата создания: {datetime.datetime.now().strftime('%d.%m.%Y %H:%M')}")
-            
-            # Определяем текущий год
-            current_year = datetime.datetime.now().year
-            
-            # Подзаголовок
-            doc.add_heading(f"Календарный график отпусков на {current_year} год", level=2)
-            
-            # Получаем список отпусков из данных
-            vacations_by_teacher = {}
-            
-            for item in data:
-                teacher_name = item.get('teacher_name', '')
-                vacations = item.get('vacations', [])
-                
-                # Фильтруем отпуска текущего года
-                current_year_vacations = []
-                for vacation in vacations:
-                    start_date = vacation.get('start_date', '')
-                    end_date = vacation.get('end_date', '')
-                    
-                    if isinstance(start_date, datetime.date) and isinstance(end_date, datetime.date):
-                        if (start_date.year == current_year) or (end_date.year == current_year):
-                            current_year_vacations.append(vacation)
-                
-                if current_year_vacations:
-                    vacations_by_teacher[teacher_name] = current_year_vacations
-            
-            # Создаем таблицу с календарем отпусков
-            table = doc.add_table(rows=1, cols=13)
-            table.style = 'Table Grid'
-            
-            # Заголовки таблицы
-            header_cells = table.rows[0].cells
-            header_cells[0].text = "Преподаватель"
-            
-            for month in range(1, 13):
-                header_cells[month].text = calendar.month_name[month]
-            
-            # Для каждого преподавателя создаем строку в таблице
-            for teacher_name, vacations in vacations_by_teacher.items():
-                row_cells = table.add_row().cells
-                row_cells[0].text = teacher_name
-                
-                # Для каждого месяца определяем, есть ли отпуск
-                for month in range(1, 13):
-                    cell_text = ""
-                    
-                    for vacation in vacations:
-                        start_date = vacation.get('start_date', '')
-                        end_date = vacation.get('end_date', '')
-                        
-                        if isinstance(start_date, datetime.date) and isinstance(end_date, datetime.date):
-                            # Определяем, попадает ли месяц в период отпуска
-                            if ((start_date.year < current_year or (start_date.year == current_year and start_date.month <= month)) and
-                                (end_date.year > current_year or (end_date.year == current_year and end_date.month >= month))):
-                                
-                                # Определяем дни отпуска в этом месяце
-                                days_in_month = calendar.monthrange(current_year, month)[1]
-                                
-                                month_start = datetime.date(current_year, month, 1)
-                                month_end = datetime.date(current_year, month, days_in_month)
-                                
-                                vacation_start_in_month = max(start_date, month_start)
-                                vacation_end_in_month = min(end_date, month_end)
-                                
-                                # Если начало и конец отпуска в пределах месяца
-                                if vacation_start_in_month <= vacation_end_in_month:
-                                    # Добавляем информацию об отпуске в ячейку
-                                    days_str = f"{vacation_start_in_month.day}-{vacation_end_in_month.day}"
-                                    vacation_type = vacation.get('vacation_type', '')
-                                    
-                                    if cell_text:
-                                        cell_text += "\n"
-                                    cell_text += f"{days_str} ({vacation_type})"
-                    
-                    row_cells[month].text = cell_text
-            
-            # Если нет данных, добавляем пустую строку
-            if not vacations_by_teacher:
-                row_cells = table.add_row().cells
-                row_cells[0].text = "Нет данных"
-            
-            # Добавляем таблицу с пояснениями типов отпусков
-            doc.add_paragraph()
-            doc.add_heading("Типы отпусков:", level=3)
-            
-            # Собираем все типы отпусков
-            vacation_types = set()
-            for vacations in vacations_by_teacher.values():
-                for vacation in vacations:
-                    vacation_types.add(vacation.get('vacation_type', ''))
-            
-            # Создаем таблицу для типов отпусков
-            if vacation_types:
-                types_table = doc.add_table(rows=1, cols=2)
-                types_table.style = 'Table Grid'
-                
-                # Заголовки таблицы
-                header_cells = types_table.rows[0].cells
-                header_cells[0].text = "Тип отпуска"
-                header_cells[1].text = "Описание"
-                
-                # Добавляем описание для каждого типа
-                for v_type in sorted(vacation_types):
-                    if v_type:  # Пропускаем пустые типы
-                        row_cells = types_table.add_row().cells
-                        row_cells[0].text = v_type
-                        
-                        # Добавляем описание типа отпуска (можно расширить в будущем)
-                        description = "Ежегодный основной отпуск" if v_type == "Основной" else \
-                                    "Дополнительный отпуск" if v_type == "Дополнительный" else \
-                                    "Отпуск без сохранения заработной платы" if v_type == "За свой счет" else \
-                                    "Учебный отпуск" if v_type == "Учебный" else \
-                                    "Описание отсутствует"
-                        
-                        row_cells[1].text = description
-            
-            # Если включены графики и есть данные, добавляем визуальный график отпусков
-            if include_chart and vacations_by_teacher:
-                doc.add_paragraph()
-                doc.add_heading("Визуализация графика отпусков", level=3)
-                
-                # Создаем график Ганта для отпусков
-                plt.figure(figsize=(12, 6))
-                
-                # Собираем все отпуска для графика
-                all_vacations = []
-                for teacher_name, vacations in vacations_by_teacher.items():
-                    for vacation in vacations:
-                        all_vacations.append({
-                            'teacher': teacher_name,
-                            'start': vacation.get('start_date', ''),
-                            'end': vacation.get('end_date', ''),
-                            'type': vacation.get('vacation_type', '')
-                        })
-                
-                # Сортируем по преподавателям и дате начала
-                all_vacations.sort(key=lambda x: (x['teacher'], x['start']))
-                
-                # Создаем список уникальных преподавателей в том же порядке
-                teachers = []
-                for v in all_vacations:
-                    if v['teacher'] not in teachers:
-                        teachers.append(v['teacher'])
-                
-                # Цвета для разных типов отпусков
-                vacation_types = set(v['type'] for v in all_vacations)
-                colors_dict = {}
-                
-                # Назначаем цвета для каждого типа отпуска
-                for i, v_type in enumerate(vacation_types):
-                    colors_dict[v_type] = plt.cm.Paired(i / len(vacation_types))
-                
-                # Создаем график для каждого отпуска
-                for i, vacation in enumerate(all_vacations):
-                    if isinstance(vacation['start'], datetime.date) and isinstance(vacation['end'], datetime.date):
-                        # Проверяем, что отпуск относится к текущему году
-                        if (vacation['start'].year == current_year) or (vacation['end'].year == current_year):
-                            # Индекс преподавателя
-                            teacher_idx = teachers.index(vacation['teacher'])
-                            
-                            # Даты начала и окончания отпуска в текущем году
-                            start_date = max(vacation['start'], datetime.date(current_year, 1, 1))
-                            end_date = min(vacation['end'], datetime.date(current_year, 12, 31))
-                            
-                            plt.barh(
-                                teacher_idx,
-                                (end_date - start_date).days + 1,
-                                left=mdates.date2num(start_date),
-                                height=0.5,
-                                color=colors_dict.get(vacation['type'], 'skyblue'),
-                                alpha=0.8,
-                                edgecolor='navy'
-                            )
-                
-                # Настраиваем оси
-                ax = plt.gca()
-                ax.xaxis_date()
-                
-                # Устанавливаем формат дат по месяцам
-                ax.xaxis.set_major_locator(mdates.MonthLocator())
-                ax.xaxis.set_major_formatter(mdates.DateFormatter('%b'))
-                
-                # Добавляем метки месяцев
-                plt.xlabel('Месяц')
-                
-                # Устанавливаем имена преподавателей на оси Y
-                plt.yticks(range(len(teachers)), teachers)
-                
-                plt.title(f'График отпусков на {current_year} год')
-                plt.grid(True, axis='x')
-                
-                # Добавляем легенду для типов отпусков
-                legend_patches = [
-                    plt.Rectangle((0, 0), 1, 1, color=color, alpha=0.8)
-                    for color in colors_dict.values()
-                ]
-                plt.legend(legend_patches, colors_dict.keys(), loc='upper right')
-                
-                # Сохраняем график во временный файл
-                chart_path = os.path.join(os.path.dirname(file_path), "temp_vacation_chart.png")
-                plt.savefig(chart_path, format='png', dpi=300, bbox_inches='tight')
-                plt.close()
-                
-                # Добавляем изображение в документ
-                doc.add_picture(chart_path, width=Cm(15))
-                
-                # Удаляем временный файл
-                if os.path.exists(chart_path):
-                    os.remove(chart_path)
-            
-            # Сохраняем Word-файл
-            doc.save(file_path)
-            
-            logger.info(f"Календарный график отпусков успешно экспортирован в Word: {file_path}")
-            
-        except Exception as e:
-            logger.error(f"Ошибка при экспорте календарного графика отпусков в Word: {str(e)}")
-            raise
+            logging.error(f"Ошибка при создании PDF-отчета: {str(e)}")
+            self._show_error(f"Не удалось создать PDF-отчет: {str(e)}")
+            return False

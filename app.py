@@ -1,7 +1,7 @@
 import logging
 import datetime
 from typing import Dict, Any, List, Optional
-from db_connection import DatabaseConnection, TeacherRepository
+from db_connection import DatabaseConnection, SalaryCalculationRepository, TeacherRepository
 from salary_calculator import SalaryCalculator
 from vacation_processor import VacationProcessor
 
@@ -214,6 +214,29 @@ class SalaryApp:
             logger.error(f"Ошибка при получении дней отпуска для преподавателя (id={teacher_id}): {str(e)}")
             raise
     
+    def get_salary_data_for_period(self, teacher_id: int, start_date, end_date) -> List[Dict[str, Any]]:
+        """
+        Получить данные о зарплате преподавателя за указанный период
+        
+        :param teacher_id: ID преподавателя
+        :param start_date: начальная дата периода
+        :param end_date: конечная дата периода
+        :return: список с данными о расчетах зарплаты
+        """
+        try:
+            logger.info(f"Получение данных о зарплате для преподавателя ID={teacher_id} за период {start_date} - {end_date}")
+            
+            # Используем существующий репозиторий для запроса данных
+            salary_repo = SalaryCalculationRepository(self.db_connection)
+            
+            # Получаем расчеты за указанный период
+            calculations = salary_repo.get_calculations_by_teacher_and_period(teacher_id, start_date, end_date)
+            
+            return calculations
+        except Exception as e:
+            logger.error(f"Ошибка при получении данных о зарплате за период: {str(e)}")
+            raise Exception(f"Не удалось получить данные о зарплате: {str(e)}")
+
     def get_teacher_remaining_vacation_days(self, teacher_id: int, year: int = None) -> int:
         """
         Получить количество оставшихся дней отпуска
