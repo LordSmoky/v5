@@ -654,12 +654,6 @@ class SalaryCalculatorGUI:
             variable=self.include_details_var
         ).grid(row=1, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
         
-        self.include_chart_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            options_frame,
-            text="Включить график динамики",
-            variable=self.include_chart_var
-        ).grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
         
         # Параметры отчета по отпускам (скрыты по умолчанию)
         self.vacation_report_frame = ttk.Frame(self.report_params_frame)
@@ -2458,62 +2452,6 @@ class SalaryCalculatorGUI:
         messagebox.showinfo("Информация", "Функция генерации отчета по отпускам находится в разработке")
 
 
-    def _export_salary_data(self, teacher_id, start_date, end_date, include_chart=False):
-        """
-        Экспортирует данные о зарплате преподавателя за указанный период
-        
-        :param teacher_id: ID преподавателя
-        :param start_date: начальная дата периода (строка в формате дд.мм.гггг или объект datetime)
-        :param end_date: конечная дата периода (строка в формате дд.мм.гггг или объект datetime)
-        :param include_chart: включать ли график в отчет
-        :return: True если экспорт выполнен успешно, иначе False
-        """
-        try:
-            logger.info(f"Экспорт данных о зарплате для преподавателя ID={teacher_id} за период {start_date} - {end_date}")
-            
-            # Получаем данные преподавателя
-            teacher_info = self.app.get_teacher_by_id(teacher_id)
-            if not teacher_info:
-                raise ValueError(f"Преподаватель с ID={teacher_id} не найден")
-            
-            # Получаем данные о зарплате за период
-            salary_data = self.app.get_salary_data_for_period(teacher_id, start_date, end_date)
-            
-            if not salary_data:
-                messagebox.showinfo("Информация", "Нет данных о зарплате за указанный период")
-                return False
-            
-            # Предлагаем пользователю выбрать место для сохранения
-            output_file = filedialog.asksaveasfilename(
-                defaultextension=".pdf",
-                filetypes=[("PDF файлы", "*.pdf"), ("Все файлы", "*.*")],
-                title="Сохранить отчет как...",
-                initialfile=f"salary_report_{teacher_info['name']}_{start_date}_{end_date}.pdf"
-            )
-            
-            if not output_file:  # Пользователь отменил сохранение
-                return False
-            
-            # Создаем отчет
-            if not self._create_pdf_report(
-                salary_data=salary_data,
-                teacher_info=teacher_info,
-                period_start=start_date,
-                period_end=end_date,
-                output_file=output_file,
-                include_chart=include_chart
-            ):
-                return False
-            
-            messagebox.showinfo("Успех", f"Отчет успешно сохранен в файл:\n{output_file}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Ошибка при экспорте данных о зарплате: {str(e)}")
-            messagebox.showerror("Ошибка", f"Не удалось экспортировать данные о зарплате: {str(e)}")
-            return False
-
-
     def _get_teacher_id_by_name(self, teacher_name):
         """
         Получает ID преподавателя по его имени
@@ -3542,172 +3480,395 @@ class SalaryCalculatorGUI:
     
 
 
+
+
+
+
+
     def _create_pdf_report(self, salary_data, teacher_info=None, period_start=None, period_end=None, output_file=None, include_chart=False):
         """
         Создает PDF-отчет с данными о зарплате
         
-        :param salary_data: Список словарей с данными о зарплате
-        :param teacher_info: Информация о преподавателе (словарь)
-        :param period_start: Начальная дата периода (строка или объект datetime)
-        :param period_end: Конечная дата периода (строка или объект datetime)
-        :param output_file: Путь для сохранения PDF-файла, если None - запрашивается у пользователя
-        :param include_chart: Включать ли графики в отчет
-        :return: True в случае успешного создания отчета, иначе False
+        Args:
+            salary_data (list): Данные о зарплате
+            teacher_info (dict, optional): Информация о преподавателе
+            period_start (str, optional): Начало периода
+            period_end (str, optional): Конец периода
+            output_file (str, optional): Путь к выходному файлу
+            include_chart (bool, optional): Включать ли график
+        
+        Returns:
+            str: Путь к созданному файлу
         """
         try:
-            # Если файл не указан, предложить пользователю выбрать место сохранения
-            if output_file is None:
+            # Проверяем наличие ReportLab
+            try:
+                from reportlab.pdfgen import canvas
+                from reportlab.lib.pagesizes import A4, landscape
+                from reportlab.pdfbase import pdfmetrics
+                from reportlab.pdfbase.ttfonts import TTFont
+                from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+                from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                from reportlab.lib import colors
+                import reportlab.rl_config
+                reportlab.rl_config.warnOnMissingFontGlyphs = 0  # Отключаем предупреждения о недостающих глифах
+            except ImportError:
+                logging.error("Не найден пакет reportlab для создания PDF")
+                raise ValueError("Для создания PDF отчетов требуется установить пакет reportlab")
+                
+            # Запрашиваем файл для сохранения, если он не указан
+            if not output_file:
                 output_file = filedialog.asksaveasfilename(
-                    defaultextension=".pdf",
+                    title="Сохранить PDF-отчет о зарплате",
                     filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
-                    title="Сохранить отчет как..."
+                    defaultextension=".pdf"
                 )
-                if not output_file:  # Пользователь отменил выбор
-                    return False
-            
+                
+            if not output_file:
+                return None
+                
+            # Регистрируем шрифт с поддержкой кириллицы
+            try:
+                # Путь к шрифту в зависимости от ОС
+                if sys.platform.startswith('win'):
+                    # Пути к стандартным шрифтам Windows с поддержкой кириллицы
+                    fonts = [
+                        ('Arial', 'C:/Windows/Fonts/arial.ttf'),
+                        ('ArialBold', 'C:/Windows/Fonts/arialbd.ttf'),
+                        ('Calibri', 'C:/Windows/Fonts/calibri.ttf'),
+                        ('Verdana', 'C:/Windows/Fonts/verdana.ttf')
+                    ]
+                    
+                    # Регистрируем первый доступный шрифт
+                    font_registered = False
+                    for font_name, font_path in fonts:
+                        if os.path.exists(font_path):
+                            pdfmetrics.registerFont(TTFont(font_name, font_path))
+                            font_registered = True
+                            self.pdf_font_name = font_name
+                            logging.info(f"Зарегистрирован шрифт {font_name} из {font_path}")
+                            break
+                            
+                    if not font_registered:
+                        # Если ни один из стандартных шрифтов не найден, сообщаем об ошибке
+                        raise FileNotFoundError("Не найдены шрифты с поддержкой кириллицы")
+                else:
+                    # Для Linux/Mac используем DejaVuSans или другие доступные шрифты
+                    font_paths = [
+                        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+                        '/usr/share/fonts/TTF/DejaVuSans.ttf',
+                        '/Library/Fonts/Arial Unicode.ttf'
+                    ]
+                    
+                    font_registered = False
+                    for font_path in font_paths:
+                        if os.path.exists(font_path):
+                            pdfmetrics.registerFont(TTFont('DejaVuSans', font_path))
+                            font_registered = True
+                            self.pdf_font_name = 'DejaVuSans'
+                            logging.info(f"Зарегистрирован шрифт DejaVuSans из {font_path}")
+                            break
+                            
+                    if not font_registered:
+                        # Если шрифт не найден, сообщаем об ошибке
+                        raise FileNotFoundError("Не найдены шрифты с поддержкой кириллицы")
+                        
+            except Exception as e:
+                logging.error(f"Ошибка при регистрации шрифта: {str(e)}")
+                # Пытаемся использовать встроенные шрифты ReportLab
+                self.pdf_font_name = 'Helvetica'
+                logging.info("Используем встроенный шрифт Helvetica (кириллица может не отображаться)")
+                
             logging.info(f"Создание PDF-отчета о зарплате: {output_file}")
             
-            # Импортируем библиотеки для создания PDF
-            try:
-                from reportlab.lib.pagesizes import A4
-                from reportlab.lib import colors
-                from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
-                from reportlab.lib.styles import getSampleStyleSheet
-                from reportlab.graphics.shapes import Drawing
-                from reportlab.graphics.charts.barcharts import VerticalBarChart
-            except ImportError:
-                logging.error("Не установлена библиотека reportlab. Установите её с помощью 'pip install reportlab'")
-                return False
-            
-            # Создаем документ
-            doc = SimpleDocTemplate(output_file, pagesize=A4)
-            story = []
-            
-            # Добавляем стили
+            # Создаем стили с новым шрифтом
             styles = getSampleStyleSheet()
-            title_style = styles['Heading1']
-            subtitle_style = styles['Heading2']
-            normal_style = styles['Normal']
+            styles.add(ParagraphStyle(
+                name='Normal_Cyrillic', 
+                fontName=self.pdf_font_name,
+                fontSize=10,
+                leading=12
+            ))
+            styles.add(ParagraphStyle(
+                name='Heading1_Cyrillic', 
+                fontName=self.pdf_font_name,
+                fontSize=16,
+                leading=18,
+                alignment=1  # По центру
+            ))
+            styles.add(ParagraphStyle(
+                name='Heading2_Cyrillic', 
+                fontName=self.pdf_font_name,
+                fontSize=14,
+                leading=16,
+                alignment=1  # По центру
+            ))
+            styles.add(ParagraphStyle(
+                name='Heading3_Cyrillic', 
+                fontName=self.pdf_font_name,
+                fontSize=12,
+                leading=14,
+                alignment=0  # По левому краю
+            ))
+            styles.add(ParagraphStyle(
+                name='Footer_Cyrillic', 
+                fontName=self.pdf_font_name,
+                fontSize=8,
+                leading=10,
+                alignment=2  # По правому краю
+            ))
+            
+            # Создаем PDF документ
+            doc = SimpleDocTemplate(
+                output_file, 
+                pagesize=landscape(A4),
+                title="Отчет по заработной плате",
+                author="Система расчета зарплаты"
+            )
+            elements = []
             
             # Заголовок отчета
-            title = "Отчет о заработной плате"
-            story.append(Paragraph(title, title_style))
-            story.append(Spacer(1, 12))
+            elements.append(Paragraph("Отчет по заработной плате", styles['Heading1_Cyrillic']))
+            elements.append(Spacer(1, 15))
             
-            # Информация о преподавателе
+            # Блок с информацией о преподавателе (если указан)
             if teacher_info:
-                teacher_title = f"Преподаватель: {teacher_info.get('name', 'Н/Д')}"
-                story.append(Paragraph(teacher_title, subtitle_style))
+                teacher_section = []
+                teacher_section.append(Paragraph("Информация о преподавателе:", styles['Heading3_Cyrillic']))
                 
-                teacher_details = [
-                    f"ID: {teacher_info.get('id', 'Н/Д')}",
-                    f"Должность: {teacher_info.get('position', 'Н/Д')}",
-                    f"Ставка: {teacher_info.get('hourly_rate', 'Н/Д')} руб/час"
+                # Форматируем данные о преподавателе
+                teacher_data = [
+                    ["ФИО:", teacher_info.get('name', 'Не указано')],
+                    ["Должность:", teacher_info.get('position', 'Не указано')],
+                    ["Ученая степень:", teacher_info.get('academic_degree', 'Не указано')],
+                    ["Квалификация:", teacher_info.get('qualification_category', 'Не указано')],
+                    ["Стаж работы:", f"{teacher_info.get('experience_years', 'Не указано')} лет"],
+                    ["Часовая ставка:", f"{teacher_info.get('hourly_rate', 'Не указано')} руб/ч"]
                 ]
                 
-                for detail in teacher_details:
-                    story.append(Paragraph(detail, normal_style))
+                # Отображаем дополнительные параметры, если они есть
+                if 'hire_date' in teacher_info:
+                    teacher_data.append(["Дата приема:", teacher_info.get('hire_date', 'Не указано')])
+                
+                if 'young_specialist' in teacher_info:
+                    young_specialist = "Да" if teacher_info.get('young_specialist') else "Нет"
+                    teacher_data.append(["Молодой специалист:", young_specialist])
                     
-                story.append(Spacer(1, 12))
+                if 'union_member' in teacher_info:
+                    union_member = "Да" if teacher_info.get('union_member') else "Нет"
+                    teacher_data.append(["Член профсоюза:", union_member])
+                
+                # Создаем таблицу с информацией о преподавателе
+                teacher_table = Table(teacher_data, colWidths=[150, 300])
+                teacher_table.setStyle(TableStyle([
+                    ('FONTNAME', (0, 0), (-1, -1), self.pdf_font_name),
+                    ('FONTSIZE', (0, 0), (-1, -1), 10),
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                    ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
+                    ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.lightgrey),
+                    ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
+                ]))
+                
+                elements.append(teacher_table)
+                elements.append(Spacer(1, 15))
             
-            # Период
-            if period_start and period_end:
-                period_text = f"Период: с {period_start} по {period_end}"
-                story.append(Paragraph(period_text, subtitle_style))
-                story.append(Spacer(1, 12))
+            # Информация о периоде отчета
+            period_info = []
+            if period_start or period_end:
+                period_text = "Период отчета: "
+                if period_start and period_end:
+                    period_text += f"с {period_start} по {period_end}"
+                elif period_start:
+                    period_text += f"с {period_start}"
+                elif period_end:
+                    period_text += f"по {period_end}"
+                    
+                period_info.append(Paragraph(period_text, styles['Normal_Cyrillic']))
+                period_info.append(Spacer(1, 10))
+                
+            elements.extend(period_info)
             
-            # Если данных нет
+            # Проверяем, есть ли данные для отчета
             if not salary_data:
-                story.append(Paragraph("Нет данных о зарплате за указанный период", normal_style))
+                elements.append(Paragraph("Нет данных для отображения в отчете", styles['Normal_Cyrillic']))
+                elements.append(Spacer(1, 10))
             else:
+                # Создаем заголовок таблицы данных
+                elements.append(Paragraph("Данные о заработной плате:", styles['Heading3_Cyrillic']))
+                elements.append(Spacer(1, 10))
+                
+                # Определяем ширину колонок для таблицы
+                # Используем фиксированные значения вместо доступа к внутренним атрибутам
+                col_widths = [100, 100, 100, 100, 100,]  # Ширины колонок
+                
                 # Заголовки таблицы
-                table_headers = ["Дата", "Отработано часов", "Ставка", "Бонус", "Налог", "Итого к выплате"]
+                data = [
+                    ["Дата", "Отработано часов", 
+                    "Надбавки", "Валовая зарплата", "Чистая зарплата"]
+                ]
                 
-                # Данные для таблицы
-                table_data = [table_headers]
+                # Функция для безопасного доступа к числовым полям
+                def safe_get(row, field, default=0.0):
+                    """Безопасно получает числовое значение из словаря, возвращая default в случае ошибки"""
+                    try:
+                        value = row.get(field)
+                        if value is None:
+                            return default
+                        return float(value)
+                    except (ValueError, TypeError):
+                        return default
                 
-                # Для графика
-                dates = []
-                payments = []
-                
-                # Заполняем данными
-                total_payment = 0
-                for entry in salary_data:
-                    row = [
-                        str(entry.get('calculation_date', 'Н/Д')),
-                        str(entry.get('hours_worked', 0)),
-                        f"{entry.get('hourly_rate', 0):.2f}",
-                        f"{entry.get('bonus_amount', 0):.2f}",
-                        f"{entry.get('tax_amount', 0):.2f}",
-                        f"{entry.get('net_salary', 0):.2f}"
-                    ]
-                    table_data.append(row)
+                # Данные о зарплате
+                for row in salary_data:
+                    # Обработка даты (может быть в разных форматах)
+                    calc_date = row.get('calculation_date', '')
+                    if hasattr(calc_date, 'strftime'):
+                        formatted_date = calc_date.strftime('%d.%m.%Y')
+                    else:
+                        formatted_date = str(calc_date)
                     
-                    # Суммируем итоговую выплату
-                    net_salary = float(entry.get('net_salary', 0))
-                    total_payment += net_salary
+                    # Форматирование числовых значений
+                    def format_float(value, default="0.00"):
+                        if value is None:
+                            return default
+                        try:
+                            return f"{float(value):.2f}"
+                        except (ValueError, TypeError):
+                            return default
                     
-                    # Собираем данные для графика
-                    dates.append(str(entry.get('calculation_date', 'Н/Д')))
-                    payments.append(net_salary)
+                    
+                    # Обрабатываем поле надбавок - если есть total_bonuses, используем его,
+                    # иначе пытаемся сложить все отдельные бонусы
+                    if 'total_bonuses' in row and row['total_bonuses'] is not None:
+                        total_bonuses = safe_get(row, 'total_bonuses')
+                    else:
+                        total_bonuses = sum([
+                            safe_get(row, 'position_bonus'),
+                            safe_get(row, 'degree_bonus'),
+                            safe_get(row, 'experience_bonus'),
+                            safe_get(row, 'category_bonus'),
+                            safe_get(row, 'young_specialist_bonus'),
+                            safe_get(row, 'bonus')
+                        ])
+                    
+                    gross_salary = safe_get(row, 'gross_salary')
+                    tax_amount = safe_get(row, 'tax_amount')
+                    union_contribution = safe_get(row, 'union_contribution')
+                    net_salary = safe_get(row, 'net_salary')
+                    
+                    # Добавляем строку данных
+                    data.append([
+                        formatted_date,
+                        str(row.get('hours_worked', '0')),
+                        format_float(total_bonuses),
+                        format_float(gross_salary),
+                        format_float(net_salary)
+                    ])
                 
-                # Создаем таблицу
-                table = Table(table_data)
+                # Создаем таблицу данных с указанными ширинами колонок
+                table = Table(data, repeatRows=1, colWidths=col_widths)
+                table.setStyle(TableStyle([
+                    ('FONTNAME', (0, 0), (-1, -1), self.pdf_font_name),
+                    ('FONTSIZE', (0, 0), (-1, 0), 9),  # Размер шрифта для заголовков
+                    ('FONTSIZE', (0, 1), (-1, -1), 8),  # Размер шрифта для данных
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue),  # Фон заголовков
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),  # Цвет текста заголовков
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),  # Выравнивание по центру
+                    ('ALIGN', (1, 1), (1, -1), 'LEFT'),  # ФИО выравниваем по левому краю
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),  # Вертикальное выравнивание
+                    ('GRID', (0, 0), (-1, -1), 1, colors.black),  # Сетка таблицы
+                    ('BOX', (0, 0), (-1, -1), 1, colors.black),  # Рамка таблицы
+                    ('LINEBELOW', (0, 0), (-1, 0), 2, colors.black),  # Линия под заголовками
+                ]))
                 
-                # Стиль таблицы
-                table_style = TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                    ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0, 0), (-1, 0), 12),
-                    ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                    ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                elements.append(table)
+                
+                # Добавляем итоговую информацию
+                elements.append(Spacer(1, 15))
+                
+                # Вычисляем итоги, используя безопасный доступ к полям
+                
+                total_hours = sum(safe_get(row, 'hours_worked') for row in salary_data)
+                total_gross = sum(safe_get(row, 'gross_salary') for row in salary_data)
+                total_net = sum(safe_get(row, 'net_salary') for row in salary_data)
+                
+                summary_data = [
+                    ["Итого по отчету:", f"{total_hours:.2f}", f"{total_bonuses:.2f}", f"{total_gross:.2f}", f"{total_net:.2f}"]
+                ]
+                
+                # Создаем таблицу итогов с теми же ширинами колонок
+                summary_table = Table(summary_data, colWidths=col_widths)
+                summary_table.setStyle(TableStyle([
+                    ('FONTNAME', (0, 0), (-1, -1), self.pdf_font_name),
+                    ('FONTSIZE', (0, 0), (-1, -1), 9),
+                    ('BACKGROUND', (0, 0), (-1, -1), colors.lightgrey),
+                    ('ALIGN', (0, 0), (0, -1), 'RIGHT'),  # Выравнивание текста "Итого" по правому краю
+                    ('ALIGN', (1, 0), (-1, -1), 'CENTER'),  # Выравнивание остальных ячеек по центру
                     ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                    ('ALIGN', (1, 1), (-1, -1), 'RIGHT'),
-                ])
-                table.setStyle(table_style)
+                    ('SPAN', (0, 0), (2, 0)),  # Объединяем первые три ячейки для "Итого по отчету:"
+                ]))
                 
-                story.append(table)
-                story.append(Spacer(1, 12))
+                elements.append(summary_table)
                 
-                # Итого
-                story.append(Paragraph(f"Итого к выплате: {total_payment:.2f} руб.", subtitle_style))
-                
-                # Добавляем график, если запрошено
-                if include_chart and len(payments) > 1:
-                    story.append(Spacer(1, 20))
-                    story.append(Paragraph("Динамика зарплаты за период:", subtitle_style))
-                    
-                    # Создаем график
-                    drawing = Drawing(400, 200)
-                    bc = VerticalBarChart()
-                    bc.x = 50
-                    bc.y = 50
-                    bc.height = 125
-                    bc.width = 300
-                    bc.data = [payments]
-                    bc.strokeColor = colors.black
-                    
-                    bc.valueAxis.valueMin = 0
-                    bc.valueAxis.valueMax = max(payments) * 1.1
-                    bc.valueAxis.valueStep = max(payments) / 10
-                    
-                    bc.categoryAxis.labels.boxAnchor = 'ne'
-                    bc.categoryAxis.labels.dx = 8
-                    bc.categoryAxis.labels.dy = -2
-                    bc.categoryAxis.labels.angle = 30
-                    bc.categoryAxis.categoryNames = dates
-                    
-                    drawing.add(bc)
-                    story.append(drawing)
+                # Если требуется график, добавляем его
+                if include_chart:
+                    try:
+                        import matplotlib.pyplot as plt
+                        import numpy as np
+                        import io
+                        
+                        # Создаем временный график
+                        plt.figure(figsize=(8, 4))
+                        
+                        # Данные для графика
+                        dates = [row.get('calculation_date') for row in salary_data 
+                                if hasattr(row.get('calculation_date', ''), 'strftime')]
+                        dates = [d.strftime('%d.%m.%Y') for d in dates]
+                        values = [safe_get(row, 'net_salary') for row in salary_data]
+                        
+                        if dates and values:
+                            plt.bar(dates, values)
+                            plt.title('Динамика заработной платы')
+                            plt.xlabel('Дата')
+                            plt.ylabel('Чистая зарплата (руб)')
+                            plt.xticks(rotation=45)
+                            plt.tight_layout()
+                            
+                            # Сохраняем график во временный буфер
+                            buf = io.BytesIO()
+                            plt.savefig(buf, format='png')
+                            buf.seek(0)
+                            
+                            # Добавляем график в отчет
+                            elements.append(Spacer(1, 20))
+                            elements.append(Paragraph("Динамика заработной платы", styles['Heading3_Cyrillic']))
+                            elements.append(Spacer(1, 10))
+                            elements.append(Image(buf, width=500, height=250))
+                            
+                            plt.close()
+                    except ImportError:
+                        elements.append(Spacer(1, 10))
+                        elements.append(Paragraph("Для отображения графиков требуется установить пакеты matplotlib и numpy", styles['Normal_Cyrillic']))
+                    except Exception as chart_error:
+                        logging.error(f"Ошибка при создании графика: {str(chart_error)}")
+                        elements.append(Spacer(1, 10))
+                        elements.append(Paragraph(f"Не удалось создать график: {str(chart_error)}", styles['Normal_Cyrillic']))
             
-            # Собираем PDF
-            doc.build(story)
+            # Добавляем дату создания отчета и подпись
+            elements.append(Spacer(1, 20))
+            current_date = datetime.datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+            elements.append(Paragraph(f"Отчет создан: {current_date}", styles['Footer_Cyrillic']))
+            elements.append(Paragraph("Система расчета зарплаты для лицея ПолессГУ", styles['Footer_Cyrillic']))
+            
+            # Строим документ
+            doc.build(elements)
+            
             logging.info(f"PDF-отчет успешно создан: {output_file}")
-            return True
+            return output_file
             
         except Exception as e:
             logging.error(f"Ошибка при создании PDF-отчета: {str(e)}")
-            self._show_error(f"Не удалось создать PDF-отчет: {str(e)}")
-            return False
+            raise ValueError(f"Не удалось создать PDF-отчет: {str(e)}")
+
+
